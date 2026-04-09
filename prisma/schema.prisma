@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SyncStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+}
+
+enum TimelineMarkerKind {
+  DONE
+  DUE
+  NONE
+}
+
+model JiraConnection {
+  id             String        @id @default(cuid())
+  name           String
+  baseUrl        String        @unique
+  defaultJql     String?
+  timezone       String        @default("Europe/Moscow")
+  projects       JiraProject[]
+  syncRuns       SyncRun[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model JiraProject {
+  id               String         @id @default(cuid())
+  jiraConnectionId String
+  jiraProjectId    String
+  key              String
+  name             String
+  connection       JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  epics            Epic[]
+  issues           Issue[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([jiraConnectionId, jiraProjectId])
+  @@unique([jiraConnectionId, key])
+}
+
+model SyncRun {
+  id               String         @id @default(cuid())
+  jiraConnectionId String
+  status           SyncStatus
+  startedAt        DateTime
+  finishedAt       DateTime?
+  requestedJql     String?
+  issuesFetched    Int            @default(0)
+  errorMessage     String?
+  connection       JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  issueHistory     IssueStatusHistory[]
+  createdAt        DateTime       @default(now())
+}
+
+model Assignee {
+  id          String   @id @default(cuid())
+  jiraAccountId String @unique
+  displayName String
+  email       String?
+  color       String
+  issues      Issue[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Epic {
+  id             String      @id @default(cuid())
+  jiraProjectId  String
+  jiraEpicId     String
+  key            String
+  summary        String
+  status         String
+  rank           String?
+  jiraUpdatedAt  DateTime?
+  project        JiraProject @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
+  issues         Issue[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([jiraProjectId, jiraEpicId])
+  @@unique([jiraProjectId, key])
+}
+
+model Issue {
+  id                String             @id @default(cuid())
+  jiraProjectId     String
+  epicId            String?
+  assigneeId        String?
+  jiraIssueId       String
+  key               String
+  summary           String
+  status            String
+  issueType         String
+  priority          String?
+  dueAt             DateTime?
+  resolvedAt        DateTime?
+  startedAt         DateTime?
+  markerAt          DateTime?
+  markerKind        TimelineMarkerKind @default(NONE)
+  jiraCreatedAt     DateTime?
+  jiraUpdatedAt     DateTime?
+  rawPayload        Json?
+  project           JiraProject        @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
+  epic              Epic?              @relation(fields: [epicId], references: [id], onDelete: SetNull)
+  assignee          Assignee?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  statusHistory     IssueStatusHistory[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([jiraProjectId, jiraIssueId])
+  @@unique([jiraProjectId, key])
+  @@index([epicId, startedAt, markerAt])
+  @@index([assigneeId, markerAt])
+}
+
+model IssueStatusHistory {
+  id          String   @id @default(cuid())
+  issueId     String
+  syncRunId   String
+  fromStatus  String?
+  toStatus    String
+  changedAt   DateTime
+  issue       Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  syncRun     SyncRun  @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@index([issueId, changedAt])
+  @@unique([issueId, changedAt, toStatus])
+}

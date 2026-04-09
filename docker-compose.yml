@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: anathema-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: anathema
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d anathema"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anathema-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/anathema?schema=public
+      JIRA_CONNECTION_NAME: ${JIRA_CONNECTION_NAME:-Primary Jira}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_DEFAULT_JQL: ${JIRA_DEFAULT_JQL:-project = CORE ORDER BY Rank ASC}
+      JIRA_AUTH_MODE: ${JIRA_AUTH_MODE:-auto}
+      JIRA_API_VERSION: ${JIRA_API_VERSION:-auto}
+      TIMELINE_TIMEZONE: ${TIMELINE_TIMEZONE:-Europe/Moscow}
+    ports:
+      - "${APP_PORT:-3001}:3000"
+
+volumes:
+  postgres_data:
