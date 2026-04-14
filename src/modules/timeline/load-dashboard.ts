@@ -6,6 +6,8 @@ import {
   buildTimelineModel,
   getDefaultTimelineRange,
   normalizeDayWidth,
+  resolveTimelineRange,
+  type TimelineDateBounds,
 } from "@/modules/timeline/build-timeline";
 import type {
   TimelineEpic,
@@ -37,16 +39,59 @@ type TimelineDashboard = {
   };
 };
 
+const timelineIssueSelect = {
+  id: true,
+  key: true,
+  summary: true,
+  status: true,
+  startedAt: true,
+  dueAt: true,
+  resolvedAt: true,
+  markerAt: true,
+  markerKind: true,
+  jiraCreatedAt: true,
+  rawPayload: true,
+  epic: {
+    select: {
+      id: true,
+      key: true,
+      summary: true,
+    },
+  },
+  assignee: {
+    select: {
+      displayName: true,
+      color: true,
+    },
+  },
+  project: {
+    select: {
+      connection: {
+        select: {
+          baseUrl: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.IssueSelect;
+
 type PersistedTimelineIssue = Prisma.IssueGetPayload<{
-  include: {
-    epic: true;
-    assignee: true;
-    project: {
-      include: {
-        connection: true;
-      };
-    };
-  };
+  select: typeof timelineIssueSelect;
+}>;
+
+const trackedProjectSelect = {
+  id: true,
+  key: true,
+  name: true,
+  connection: {
+    select: {
+      name: true,
+    },
+  },
+} satisfies Prisma.JiraProjectSelect;
+
+type TrackedProject = Prisma.JiraProjectGetPayload<{
+  select: typeof trackedProjectSelect;
 }>;
 
 const NO_COMPONENT_LABEL = "No component";
@@ -831,13 +876,7 @@ function buildFallbackRangeInputs(from?: string, to?: string, dayWidth?: string)
   };
 }
 
-function formatProjectLabel(
-  project: Prisma.JiraProjectGetPayload<{
-    include: {
-      connection: true;
-    };
-  }>,
-) {
+function formatProjectLabel(project: TrackedProject) {
   const connectionName = project.connection.name.trim();
   const projectName = project.name.trim();
 
@@ -848,6 +887,89 @@ function formatProjectLabel(
   return `${project.key} · ${projectName} (${connectionName})`;
 }
 
+function buildIssueScopeWhere(selectedProjectId: string | null): Prisma.IssueWhereInput {
+  return {
+    issueType: {
+      not: "Epic",
+    },
+    ...(selectedProjectId ? { jiraProjectId: selectedProjectId } : {}),
+  };
+}
+
+function pickEarlierDate(...values: Array<Date | null | undefined>) {
+  const dates = values.filter((value): value is Date => value instanceof Date);
+
+  if (dates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.min(...dates.map(Number)));
+}
+
+function pickLaterDate(...values: Array<Date | null | undefined>) {
+  const dates = values.filter((value): value is Date => value instanceof Date);
+
+  if (dates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...dates.map(Number)));
+}
+
+function buildIssueDateBounds(summary: {
+  _min: {
+    startedAt: Date | null;
+    markerAt: Date | null;
+  };
+  _max: {
+    startedAt: Date | null;
+    markerAt: Date | null;
+  };
+}): TimelineDateBounds {
+  return {
+    minDate: pickEarlierDate(summary._min.startedAt, summary._min.markerAt),
+    maxDate: pickLaterDate(summary._max.startedAt, summary._max.markerAt),
+  };
+}
+
+function buildVisibleIssueWhere(
+  scopeWhere: Prisma.IssueWhereInput,
+  visibleStart: Date,
+  visibleEnd: Date,
+): Prisma.IssueWhereInput {
+  return {
+    AND: [
+      scopeWhere,
+      {
+        markerAt: {
+          gte: visibleStart,
+        },
+      },
+      {
+        OR: [
+          {
+            startedAt: {
+              lte: visibleEnd,
+            },
+          },
+          {
+            AND: [
+              {
+                startedAt: null,
+              },
+              {
+                markerAt: {
+                  lte: visibleEnd,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 export async function loadTimelineDashboard({
   from,
   to,
@@ -855,23 +977,14 @@ export async function loadTimelineDashboard({
   project,
 }: LoadTimelineDashboardInput = {}): Promise<TimelineDashboard> {
   try {
-    const [latestSync, trackedProjects, totalIssueCount] = await Promise.all([
+    const [latestSync, trackedProjects] = await Promise.all([
       prisma.syncRun.findFirst({
         orderBy: {
           startedAt: "desc",
         },
       }),
       prisma.jiraProject.findMany({
-        include: {
-          connection: true,
-        },
-      }),
-      prisma.issue.count({
-        where: {
-          issueType: {
-            not: "Epic",
-          },
-        },
+        select: trackedProjectSelect,
       }),
     ]);
     const projectFilterOptions = trackedProjects
@@ -885,37 +998,53 @@ export async function loadTimelineDashboard({
     )
       ? project ?? null
       : null;
-    const issues = await prisma.issue.findMany({
-      where: {
-        issueType: {
-          not: "Epic",
-        },
-        ...(selectedProjectId ? { jiraProjectId: selectedProjectId } : {}),
+    const issueScopeWhere = buildIssueScopeWhere(selectedProjectId);
+    const issueSummary = await prisma.issue.aggregate({
+      where: issueScopeWhere,
+      _count: {
+        id: true,
       },
-      include: {
-        epic: true,
-        assignee: true,
-        project: {
-          include: {
-            connection: true,
-          },
-        },
+      _min: {
+        startedAt: true,
+        markerAt: true,
       },
-      orderBy: [
-        {
-          startedAt: "asc",
-        },
-        {
-          markerAt: "asc",
-        },
-      ],
+      _max: {
+        startedAt: true,
+        markerAt: true,
+      },
     });
+    const totalIssueCount = issueSummary._count.id;
+    const resolvedRange = resolveTimelineRange(
+      {
+        rangeStart: from,
+        rangeEnd: to,
+        dayWidth,
+      },
+      buildIssueDateBounds(issueSummary),
+    );
+    const issues =
+      totalIssueCount > 0
+        ? await prisma.issue.findMany({
+            where: buildVisibleIssueWhere(
+              issueScopeWhere,
+              resolvedRange.visibleStart,
+              resolvedRange.visibleEnd,
+            ),
+            select: timelineIssueSelect,
+            orderBy: [
+              {
+                startedAt: "asc",
+              },
+              {
+                markerAt: "asc",
+              },
+            ],
+          })
+        : [];
     const timeline =
       totalIssueCount > 0
         ? buildTimelineModel(toTimelineEpics(issues), {
-            rangeStart: from,
-            rangeEnd: to,
-            dayWidth,
+            resolvedRange,
           })
         : null;
 

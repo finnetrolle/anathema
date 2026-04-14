@@ -24,10 +24,29 @@ const MIN_DAY_WIDTH = 48;
 const MAX_DAY_WIDTH = 240;
 const DEFAULT_RANGE_SPAN_IN_DAYS = 15;
 
-type BuildTimelineOptions = {
+type TimelineRangeOptions = {
   rangeStart?: string | null;
   rangeEnd?: string | null;
   dayWidth?: string | number | null;
+};
+
+export type TimelineDateBounds = {
+  minDate: Date | null;
+  maxDate: Date | null;
+};
+
+export type TimelineResolvedRange = {
+  selectedStart: Date;
+  selectedEnd: Date;
+  visibleStart: Date;
+  visibleEnd: Date;
+  rangeStartInput: string;
+  rangeEndInput: string;
+  dayWidth: number;
+};
+
+type BuildTimelineOptions = TimelineRangeOptions & {
+  resolvedRange?: TimelineResolvedRange;
 };
 
 function assertDate(value: string | null) {
@@ -93,6 +112,22 @@ function endOfDay(value: Date) {
   return new Date(floorToDay(value).getTime() + DAY_IN_MS - 1);
 }
 
+function collectDateBounds(dates: Array<Date | null>) {
+  const validDates = dates.filter((date): date is Date => date !== null);
+
+  if (validDates.length === 0) {
+    return {
+      minDate: null,
+      maxDate: null,
+    } satisfies TimelineDateBounds;
+  }
+
+  return {
+    minDate: new Date(Math.min(...validDates.map(Number))),
+    maxDate: new Date(Math.max(...validDates.map(Number))),
+  } satisfies TimelineDateBounds;
+}
+
 export function getDefaultTimelineRange(now = new Date()) {
   const start = startOfCurrentWeek(now);
   const end = new Date(start.getTime() + DEFAULT_RANGE_SPAN_IN_DAYS * DAY_IN_MS);
@@ -116,6 +151,38 @@ export function normalizeDayWidth(value?: string | number | null) {
     MAX_DAY_WIDTH,
     Math.max(MIN_DAY_WIDTH, Math.round(numericValue)),
   );
+}
+
+export function resolveTimelineRange(
+  options: TimelineRangeOptions = {},
+  dataBounds?: TimelineDateBounds | null,
+  now = new Date(),
+): TimelineResolvedRange {
+  const defaultRange = getDefaultTimelineRange(now);
+  const fallbackMinDate = dataBounds?.minDate ?? now;
+  const fallbackMaxDate = dataBounds?.maxDate ?? now;
+  const hasCustomRange =
+    typeof options.rangeStart === "string" || typeof options.rangeEnd === "string";
+  const selectedStart = hasCustomRange
+    ? parseDateInput(options.rangeStart) ?? fallbackMinDate
+    : defaultRange.start;
+  const selectedEndInput = hasCustomRange
+    ? options.rangeEnd
+      ? endOfDay(parseDateInput(options.rangeEnd) ?? fallbackMaxDate)
+      : fallbackMaxDate
+    : endOfDay(defaultRange.end);
+  const selectedEnd =
+    selectedEndInput < selectedStart ? selectedStart : selectedEndInput;
+
+  return {
+    selectedStart,
+    selectedEnd,
+    visibleStart: floorToDay(selectedStart),
+    visibleEnd: selectedEnd,
+    rangeStartInput: toDateInputValue(selectedStart),
+    rangeEndInput: toDateInputValue(selectedEnd),
+    dayWidth: normalizeDayWidth(options.dayWidth),
+  };
 }
 
 function createColumns(minDate: Date, maxDate: Date): TimelineColumn[] {
@@ -390,43 +457,36 @@ export function buildTimelineModel(
   epics: TimelineEpic[],
   options: BuildTimelineOptions = {},
 ): TimelineModel {
-  const dates = epics.flatMap((epic) =>
-    epic.issues.flatMap((issue) =>
-      [issue.startAt, issue.markerAt]
-        .map(assertDate)
-        .filter((date): date is Date => date !== null),
-    ),
+  const resolvedRange =
+    options.resolvedRange ??
+    resolveTimelineRange(
+      {
+        rangeStart: options.rangeStart,
+        rangeEnd: options.rangeEnd,
+        dayWidth: options.dayWidth,
+      },
+      collectDateBounds(
+        epics.flatMap((epic) =>
+          epic.issues.flatMap((issue) => [issue.startAt, issue.markerAt].map(assertDate)),
+        ),
+      ),
+    );
+  const columns = createColumns(
+    resolvedRange.selectedStart,
+    resolvedRange.selectedEnd,
   );
-
-  const fallbackNow = new Date();
-  const dataMinDate =
-    dates.length > 0 ? new Date(Math.min(...dates.map(Number))) : fallbackNow;
-  const dataMaxDate =
-    dates.length > 0 ? new Date(Math.max(...dates.map(Number))) : fallbackNow;
-  const defaultRange = getDefaultTimelineRange(fallbackNow);
-  const hasCustomRange =
-    typeof options.rangeStart === "string" || typeof options.rangeEnd === "string";
-  const selectedStart = hasCustomRange
-    ? parseDateInput(options.rangeStart) ?? dataMinDate
-    : defaultRange.start;
-  const selectedEndInput = hasCustomRange
-    ? options.rangeEnd
-      ? endOfDay(parseDateInput(options.rangeEnd) ?? dataMaxDate)
-      : dataMaxDate
-    : endOfDay(defaultRange.end);
-  const selectedEnd =
-    selectedEndInput < selectedStart ? selectedStart : selectedEndInput;
-  const visibleStart = floorToDay(selectedStart);
-  const visibleEnd = selectedEnd;
-  const dayWidth = normalizeDayWidth(options.dayWidth);
-  const columns = createColumns(selectedStart, selectedEnd);
-  const rows = buildRows(epics, columns, visibleStart, visibleEnd);
+  const rows = buildRows(
+    epics,
+    columns,
+    resolvedRange.visibleStart,
+    resolvedRange.visibleEnd,
+  );
   const rangeLabelStart = columns[0]?.startsAt
     ? new Date(columns[0].startsAt)
-    : floorToDay(selectedStart);
+    : floorToDay(resolvedRange.selectedStart);
   const rangeLabelEnd = columns.at(-1)?.startsAt
     ? new Date(columns.at(-1)!.startsAt)
-    : floorToDay(selectedEnd);
+    : floorToDay(resolvedRange.selectedEnd);
 
   return {
     columns,
@@ -435,8 +495,8 @@ export function buildTimelineModel(
     rangeLabel: `${DATE_FORMATTER.format(rangeLabelStart)} - ${DATE_FORMATTER.format(
       rangeLabelEnd,
     )}`,
-    rangeStartInput: toDateInputValue(selectedStart),
-    rangeEndInput: toDateInputValue(selectedEnd),
-    dayWidth,
+    rangeStartInput: resolvedRange.rangeStartInput,
+    rangeEndInput: resolvedRange.rangeEndInput,
+    dayWidth: resolvedRange.dayWidth,
   };
 }

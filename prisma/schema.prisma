@@ -234,6 +234,8 @@ model Issue {
   @@unique([jiraProjectId, key])
   @@index([epicId, startedAt, markerAt])
   @@index([assigneeId, markerAt])
+  @@index([jiraProjectId, issueType, startedAt, markerAt])
+  @@index([issueType, markerAt])
 }
 
 model IssueStatusHistory {
