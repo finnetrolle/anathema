@@ -20,15 +20,16 @@ enum TimelineMarkerKind {
 }
 
 model JiraConnection {
-  id             String        @id @default(cuid())
-  name           String
-  baseUrl        String        @unique
-  defaultJql     String?
-  timezone       String        @default("Europe/Moscow")
-  projects       JiraProject[]
-  syncRuns       SyncRun[]
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  id         String        @id @default(cuid())
+  name       String
+  baseUrl    String        @unique
+  defaultJql String?
+  timezone   String        @default("Europe/Moscow")
+  projects   JiraProject[]
+  assignees  Assignee[]
+  syncRuns   SyncRun[]
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 }
 
 model JiraProject {
@@ -48,73 +49,186 @@ model JiraProject {
 }
 
 model SyncRun {
-  id               String         @id @default(cuid())
-  jiraConnectionId String
-  status           SyncStatus
-  startedAt        DateTime
-  finishedAt       DateTime?
-  requestedJql     String?
-  issuesFetched    Int            @default(0)
-  errorMessage     String?
-  connection       JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
-  issueHistory     IssueStatusHistory[]
-  createdAt        DateTime       @default(now())
+  id                 String                     @id @default(cuid())
+  jiraConnectionId   String
+  status             SyncStatus
+  startedAt          DateTime
+  finishedAt         DateTime?
+  requestedJql       String?
+  issuesFetched      Int                        @default(0)
+  errorMessage       String?
+  connection         JiraConnection             @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  issueHistory       IssueStatusHistory[]
+  stagedProjects     StagedJiraProject[]
+  stagedEpics        StagedEpic[]
+  stagedAssignees    StagedAssignee[]
+  stagedIssues       StagedIssue[]
+  stagedIssueHistory StagedIssueStatusHistory[]
+  createdAt          DateTime                   @default(now())
+}
+
+model StagedJiraProject {
+  id            String        @id @default(cuid())
+  syncRunId     String
+  jiraProjectId String
+  key           String
+  name          String
+  syncRun       SyncRun       @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  epics         StagedEpic[]
+  issues        StagedIssue[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([syncRunId, jiraProjectId])
+  @@unique([syncRunId, key])
+  @@index([syncRunId])
+}
+
+model StagedAssignee {
+  id            String        @id @default(cuid())
+  syncRunId     String
+  jiraAccountId String
+  displayName   String
+  email         String?
+  color         String
+  syncRun       SyncRun       @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  issues        StagedIssue[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([syncRunId, jiraAccountId])
+  @@index([syncRunId])
+}
+
+model StagedEpic {
+  id              String            @id @default(cuid())
+  syncRunId       String
+  stagedProjectId String
+  jiraEpicId      String
+  key             String
+  summary         String
+  status          String
+  rank            String?
+  jiraUpdatedAt   DateTime?
+  syncRun         SyncRun           @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  project         StagedJiraProject @relation(fields: [stagedProjectId], references: [id], onDelete: Cascade)
+  issues          StagedIssue[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([syncRunId, stagedProjectId, jiraEpicId])
+  @@unique([syncRunId, stagedProjectId, key])
+  @@index([syncRunId, stagedProjectId])
+}
+
+model StagedIssue {
+  id               String                     @id @default(cuid())
+  syncRunId        String
+  stagedProjectId  String
+  stagedEpicId     String?
+  stagedAssigneeId String?
+  jiraIssueId      String
+  key              String
+  summary          String
+  status           String
+  issueType        String
+  priority         String?
+  dueAt            DateTime?
+  resolvedAt       DateTime?
+  startedAt        DateTime?
+  markerAt         DateTime?
+  markerKind       TimelineMarkerKind         @default(NONE)
+  jiraCreatedAt    DateTime?
+  jiraUpdatedAt    DateTime?
+  rawPayload       Json?
+  syncRun          SyncRun                    @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  project          StagedJiraProject          @relation(fields: [stagedProjectId], references: [id], onDelete: Cascade)
+  epic             StagedEpic?                @relation(fields: [stagedEpicId], references: [id], onDelete: SetNull)
+  assignee         StagedAssignee?            @relation(fields: [stagedAssigneeId], references: [id], onDelete: SetNull)
+  statusHistory    StagedIssueStatusHistory[]
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  @@unique([syncRunId, stagedProjectId, jiraIssueId])
+  @@unique([syncRunId, stagedProjectId, key])
+  @@index([syncRunId, stagedEpicId, startedAt, markerAt])
+  @@index([syncRunId, stagedAssigneeId, markerAt])
+}
+
+model StagedIssueStatusHistory {
+  id            String      @id @default(cuid())
+  syncRunId     String
+  stagedIssueId String
+  fromStatus    String?
+  toStatus      String
+  changedAt     DateTime
+  syncRun       SyncRun     @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  issue         StagedIssue @relation(fields: [stagedIssueId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([syncRunId, stagedIssueId, changedAt, toStatus])
+  @@index([syncRunId, stagedIssueId, changedAt])
 }
 
 model Assignee {
-  id          String   @id @default(cuid())
-  jiraAccountId String @unique
-  displayName String
-  email       String?
-  color       String
-  issues      Issue[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String          @id @default(cuid())
+  jiraConnectionId String?
+  jiraAccountId    String
+  displayName      String
+  email            String?
+  color            String
+  connection       JiraConnection? @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  issues           Issue[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([jiraConnectionId, jiraAccountId])
+  @@index([jiraConnectionId])
 }
 
 model Epic {
-  id             String      @id @default(cuid())
-  jiraProjectId  String
-  jiraEpicId     String
-  key            String
-  summary        String
-  status         String
-  rank           String?
-  jiraUpdatedAt  DateTime?
-  project        JiraProject @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
-  issues         Issue[]
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  id            String      @id @default(cuid())
+  jiraProjectId String
+  jiraEpicId    String
+  key           String
+  summary       String
+  status        String
+  rank          String?
+  jiraUpdatedAt DateTime?
+  project       JiraProject @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
+  issues        Issue[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
   @@unique([jiraProjectId, jiraEpicId])
   @@unique([jiraProjectId, key])
 }
 
 model Issue {
-  id                String             @id @default(cuid())
-  jiraProjectId     String
-  epicId            String?
-  assigneeId        String?
-  jiraIssueId       String
-  key               String
-  summary           String
-  status            String
-  issueType         String
-  priority          String?
-  dueAt             DateTime?
-  resolvedAt        DateTime?
-  startedAt         DateTime?
-  markerAt          DateTime?
-  markerKind        TimelineMarkerKind @default(NONE)
-  jiraCreatedAt     DateTime?
-  jiraUpdatedAt     DateTime?
-  rawPayload        Json?
-  project           JiraProject        @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
-  epic              Epic?              @relation(fields: [epicId], references: [id], onDelete: SetNull)
-  assignee          Assignee?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
-  statusHistory     IssueStatusHistory[]
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  id            String               @id @default(cuid())
+  jiraProjectId String
+  epicId        String?
+  assigneeId    String?
+  jiraIssueId   String
+  key           String
+  summary       String
+  status        String
+  issueType     String
+  priority      String?
+  dueAt         DateTime?
+  resolvedAt    DateTime?
+  startedAt     DateTime?
+  markerAt      DateTime?
+  markerKind    TimelineMarkerKind   @default(NONE)
+  jiraCreatedAt DateTime?
+  jiraUpdatedAt DateTime?
+  rawPayload    Json?
+  project       JiraProject          @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
+  epic          Epic?                @relation(fields: [epicId], references: [id], onDelete: SetNull)
+  assignee      Assignee?            @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  statusHistory IssueStatusHistory[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   @@unique([jiraProjectId, jiraIssueId])
   @@unique([jiraProjectId, key])
@@ -123,16 +237,16 @@ model Issue {
 }
 
 model IssueStatusHistory {
-  id          String   @id @default(cuid())
-  issueId     String
-  syncRunId   String
-  fromStatus  String?
-  toStatus    String
-  changedAt   DateTime
-  issue       Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  syncRun     SyncRun  @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  issueId    String
+  syncRunId  String
+  fromStatus String?
+  toStatus   String
+  changedAt  DateTime
+  issue      Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  syncRun    SyncRun  @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
 
-  @@index([issueId, changedAt])
   @@unique([issueId, changedAt, toStatus])
+  @@index([issueId, changedAt])
 }

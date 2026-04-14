@@ -1,7 +1,7 @@
 import {
+  Prisma,
   TimelineMarkerKind as PrismaTimelineMarkerKind,
   SyncStatus,
-  type Prisma,
 } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
@@ -80,6 +80,8 @@ type EpicSeed = {
 
 type PersistedEpicRecord = {
   id: string;
+  syncRunId: string;
+  stagedProjectId: string;
   jiraEpicId: string;
   key: string;
   summary: string;
@@ -120,6 +122,10 @@ function parseJiraDate(value?: string | null) {
 
 function toPrismaJson(value: unknown) {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function toNullablePrismaJson(value: Prisma.JsonValue | null) {
+  return value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
 }
 
 function buildRawPayload(
@@ -271,18 +277,19 @@ function mergeEpicValues(
   };
 }
 
-async function upsertEpic(params: {
-  jiraProjectId: string;
+async function upsertStagedEpic(params: {
+  syncRunId: string;
+  stagedProjectId: string;
   epicSeed: EpicSeed;
   epicCache: Map<string, PersistedEpicRecord>;
   signal?: AbortSignal;
 }) {
   const cacheKeyById = buildEpicCacheKey(
-    params.jiraProjectId,
+    params.stagedProjectId,
     params.epicSeed.jiraEpicId,
   );
   const cacheKeyByKey = buildEpicCacheKey(
-    params.jiraProjectId,
+    params.stagedProjectId,
     params.epicSeed.key,
   );
 
@@ -292,9 +299,10 @@ async function upsertEpic(params: {
     cachedEpic ??
     (await runWithAbortCheck(
       () =>
-        prisma.epic.findFirst({
+        prisma.stagedEpic.findFirst({
           where: {
-            jiraProjectId: params.jiraProjectId,
+            syncRunId: params.syncRunId,
+            stagedProjectId: params.stagedProjectId,
             OR: [
               {
                 jiraEpicId: params.epicSeed.jiraEpicId,
@@ -306,6 +314,8 @@ async function upsertEpic(params: {
           },
           select: {
             id: true,
+            syncRunId: true,
+            stagedProjectId: true,
             jiraEpicId: true,
             key: true,
             summary: true,
@@ -319,7 +329,7 @@ async function upsertEpic(params: {
   const epic = existingEpic
     ? await runWithAbortCheck(
         () =>
-          prisma.epic.update({
+          prisma.stagedEpic.update({
             where: {
               id: existingEpic.id,
             },
@@ -329,9 +339,10 @@ async function upsertEpic(params: {
       )
     : await runWithAbortCheck(
         () =>
-          prisma.epic.create({
+          prisma.stagedEpic.create({
             data: {
-              jiraProjectId: params.jiraProjectId,
+              syncRunId: params.syncRunId,
+              stagedProjectId: params.stagedProjectId,
               jiraEpicId: params.epicSeed.jiraEpicId,
               key: params.epicSeed.key,
               summary: params.epicSeed.summary,
@@ -344,6 +355,8 @@ async function upsertEpic(params: {
 
   const persistedEpic: PersistedEpicRecord = {
     id: epic.id,
+    syncRunId: epic.syncRunId,
+    stagedProjectId: epic.stagedProjectId,
     jiraEpicId: epic.jiraEpicId,
     key: epic.key,
     summary: epic.summary,
@@ -352,11 +365,11 @@ async function upsertEpic(params: {
   };
 
   params.epicCache.set(
-    buildEpicCacheKey(params.jiraProjectId, persistedEpic.jiraEpicId),
+    buildEpicCacheKey(params.stagedProjectId, persistedEpic.jiraEpicId),
     persistedEpic,
   );
   params.epicCache.set(
-    buildEpicCacheKey(params.jiraProjectId, persistedEpic.key),
+    buildEpicCacheKey(params.stagedProjectId, persistedEpic.key),
     persistedEpic,
   );
 
@@ -375,7 +388,6 @@ async function runWithAbortCheck<T>(
 }
 
 async function persistIssues(params: {
-  jiraConnectionId: string;
   syncRunId: string;
   issues: JiraIssue[];
   epicLinkFieldId?: string;
@@ -394,12 +406,12 @@ async function persistIssues(params: {
   for (const issue of params.issues) {
     throwIfAborted(params.signal);
     const projectSeed = buildProjectSeed(issue);
-    const project = await runWithAbortCheck(
+    const stagedProject = await runWithAbortCheck(
       () =>
-        prisma.jiraProject.upsert({
+        prisma.stagedJiraProject.upsert({
           where: {
-            jiraConnectionId_jiraProjectId: {
-              jiraConnectionId: params.jiraConnectionId,
+            syncRunId_jiraProjectId: {
+              syncRunId: params.syncRunId,
               jiraProjectId: projectSeed.jiraProjectId,
             },
           },
@@ -408,7 +420,7 @@ async function persistIssues(params: {
             name: projectSeed.name,
           },
           create: {
-            jiraConnectionId: params.jiraConnectionId,
+            syncRunId: params.syncRunId,
             jiraProjectId: projectSeed.jiraProjectId,
             key: projectSeed.key,
             name: projectSeed.name,
@@ -416,17 +428,20 @@ async function persistIssues(params: {
         }),
       params.signal,
     );
-    projects.add(project.key);
+    projects.add(stagedProject.key);
 
     const assigneeDetails = issue.fields.assignee;
     const assigneeIdentity = deriveAssigneeIdentity(assigneeDetails);
-    const assignee = assigneeDetails
+    const stagedAssignee = assigneeDetails
       && assigneeIdentity
       ? await runWithAbortCheck(
           () =>
-            prisma.assignee.upsert({
+            prisma.stagedAssignee.upsert({
               where: {
-                jiraAccountId: assigneeIdentity,
+                syncRunId_jiraAccountId: {
+                  syncRunId: params.syncRunId,
+                  jiraAccountId: assigneeIdentity,
+                },
               },
               update: {
                 displayName: assigneeDetails.displayName,
@@ -434,6 +449,7 @@ async function persistIssues(params: {
                 color: deriveAssigneeColor(assigneeIdentity),
               },
               create: {
+                syncRunId: params.syncRunId,
                 jiraAccountId: assigneeIdentity,
                 displayName: assigneeDetails.displayName,
                 email: assigneeDetails.emailAddress ?? null,
@@ -444,8 +460,8 @@ async function persistIssues(params: {
         )
       : null;
 
-    if (assignee) {
-      assignees.add(assignee.jiraAccountId);
+    if (stagedAssignee) {
+      assignees.add(stagedAssignee.jiraAccountId);
     }
 
     const epicSeed =
@@ -455,32 +471,34 @@ async function persistIssues(params: {
         epicLookup,
         epicLinkFieldId: params.epicLinkFieldId,
       });
-    const epic = epicSeed
-      ? await upsertEpic({
-          jiraProjectId: project.id,
+    const stagedEpic = epicSeed
+      ? await upsertStagedEpic({
+          syncRunId: params.syncRunId,
+          stagedProjectId: stagedProject.id,
           epicSeed,
           epicCache,
           signal: params.signal,
         })
       : null;
 
-    if (epic) {
-      epics.add(epic.key);
+    if (stagedEpic) {
+      epics.add(stagedEpic.key);
     }
 
     const timelineFields = deriveTimelineFields(issue);
     const persistedIssue = await runWithAbortCheck(
       () =>
-        prisma.issue.upsert({
+        prisma.stagedIssue.upsert({
           where: {
-            jiraProjectId_jiraIssueId: {
-              jiraProjectId: project.id,
+            syncRunId_stagedProjectId_jiraIssueId: {
+              syncRunId: params.syncRunId,
+              stagedProjectId: stagedProject.id,
               jiraIssueId: issue.id,
             },
           },
           update: {
-            epicId: isEpicIssue(issue) ? null : (epic?.id ?? null),
-            assigneeId: assignee?.id ?? null,
+            stagedEpicId: isEpicIssue(issue) ? null : (stagedEpic?.id ?? null),
+            stagedAssigneeId: stagedAssignee?.id ?? null,
             key: issue.key,
             summary: issue.fields.summary,
             status: issue.fields.status?.name ?? "Unknown",
@@ -502,9 +520,10 @@ async function persistIssues(params: {
             ),
           },
           create: {
-            jiraProjectId: project.id,
-            epicId: isEpicIssue(issue) ? null : (epic?.id ?? null),
-            assigneeId: assignee?.id ?? null,
+            syncRunId: params.syncRunId,
+            stagedProjectId: stagedProject.id,
+            stagedEpicId: isEpicIssue(issue) ? null : (stagedEpic?.id ?? null),
+            stagedAssigneeId: stagedAssignee?.id ?? null,
             jiraIssueId: issue.id,
             key: issue.key,
             summary: issue.fields.summary,
@@ -555,21 +574,21 @@ async function persistIssues(params: {
 
       await runWithAbortCheck(
         () =>
-          prisma.issueStatusHistory.upsert({
+          prisma.stagedIssueStatusHistory.upsert({
             where: {
-              issueId_changedAt_toStatus: {
-                issueId: persistedIssue.id,
+              syncRunId_stagedIssueId_changedAt_toStatus: {
+                syncRunId: params.syncRunId,
+                stagedIssueId: persistedIssue.id,
                 changedAt,
                 toStatus: transition.toStatus,
               },
             },
             update: {
               fromStatus: transition.fromStatus,
-              syncRunId: params.syncRunId,
             },
             create: {
-              issueId: persistedIssue.id,
               syncRunId: params.syncRunId,
+              stagedIssueId: persistedIssue.id,
               fromStatus: transition.fromStatus,
               toStatus: transition.toStatus,
               changedAt,
@@ -620,6 +639,343 @@ async function upsertJiraConnection(params: {
   });
 }
 
+async function cleanupStagedSyncRun(
+  tx: Prisma.TransactionClient,
+  syncRunId: string,
+) {
+  await tx.stagedJiraProject.deleteMany({
+    where: {
+      syncRunId,
+    },
+  });
+  await tx.stagedAssignee.deleteMany({
+    where: {
+      syncRunId,
+    },
+  });
+}
+
+async function acquireJiraConnectionLock(
+  tx: Prisma.TransactionClient,
+  jiraConnectionId: string,
+) {
+  await tx.$queryRaw<{ advisoryLock: string }[]>`
+    SELECT pg_advisory_xact_lock(hashtext(${jiraConnectionId}))::text AS "advisoryLock"
+  `;
+}
+
+async function publishSyncRun(params: {
+  syncRunId: string;
+  jiraConnectionId: string;
+  signal?: AbortSignal;
+}) {
+  throwIfAborted(params.signal);
+
+  await prisma.$transaction(async (tx) => {
+    await acquireJiraConnectionLock(tx, params.jiraConnectionId);
+
+    const syncRun = await tx.syncRun.findUnique({
+      where: {
+        id: params.syncRunId,
+      },
+      select: {
+        id: true,
+        jiraConnectionId: true,
+        startedAt: true,
+        status: true,
+      },
+    });
+
+    if (!syncRun) {
+      throw new Error("Sync run not found.");
+    }
+
+    if (syncRun.status !== SyncStatus.STARTED) {
+      throw new Error("Sync run is no longer active.");
+    }
+
+    if (syncRun.jiraConnectionId !== params.jiraConnectionId) {
+      throw new Error("Sync run belongs to a different Jira connection.");
+    }
+
+    const newerRun = await tx.syncRun.findFirst({
+      where: {
+        jiraConnectionId: params.jiraConnectionId,
+        id: {
+          not: params.syncRunId,
+        },
+        startedAt: {
+          gt: syncRun.startedAt,
+        },
+        status: {
+          in: [SyncStatus.STARTED, SyncStatus.SUCCEEDED],
+        },
+      },
+      select: {
+        id: true,
+      },
+      orderBy: {
+        startedAt: "desc",
+      },
+    });
+
+    if (newerRun) {
+      throw new Error("A newer sync run already exists for this Jira connection.");
+    }
+
+    const stagedProjects = await tx.stagedJiraProject.findMany({
+      where: {
+        syncRunId: params.syncRunId,
+      },
+      orderBy: {
+        key: "asc",
+      },
+    });
+    const stagedAssignees = await tx.stagedAssignee.findMany({
+      where: {
+        syncRunId: params.syncRunId,
+      },
+      orderBy: {
+        jiraAccountId: "asc",
+      },
+    });
+    const stagedEpics = await tx.stagedEpic.findMany({
+      where: {
+        syncRunId: params.syncRunId,
+      },
+      orderBy: [
+        {
+          stagedProjectId: "asc",
+        },
+        {
+          key: "asc",
+        },
+      ],
+    });
+    const stagedIssues = await tx.stagedIssue.findMany({
+      where: {
+        syncRunId: params.syncRunId,
+      },
+      orderBy: [
+        {
+          stagedProjectId: "asc",
+        },
+        {
+          key: "asc",
+        },
+      ],
+    });
+    const stagedIssueHistory = await tx.stagedIssueStatusHistory.findMany({
+      where: {
+        syncRunId: params.syncRunId,
+      },
+      orderBy: [
+        {
+          changedAt: "asc",
+        },
+        {
+          toStatus: "asc",
+        },
+      ],
+    });
+
+    const stagedProjectIds = new Set(stagedProjects.map((project) => project.id));
+    const stagedAssigneeIds = new Set(stagedAssignees.map((assignee) => assignee.id));
+    const stagedEpicIds = new Set(stagedEpics.map((epic) => epic.id));
+    const stagedIssueIds = new Set(stagedIssues.map((issue) => issue.id));
+
+    for (const stagedEpic of stagedEpics) {
+      if (!stagedProjectIds.has(stagedEpic.stagedProjectId)) {
+        throw new Error("Staged epic references a missing staged project.");
+      }
+    }
+
+    for (const stagedIssue of stagedIssues) {
+      if (!stagedProjectIds.has(stagedIssue.stagedProjectId)) {
+        throw new Error("Staged issue references a missing staged project.");
+      }
+
+      if (stagedIssue.stagedEpicId && !stagedEpicIds.has(stagedIssue.stagedEpicId)) {
+        throw new Error("Staged issue references a missing staged epic.");
+      }
+
+      if (
+        stagedIssue.stagedAssigneeId &&
+        !stagedAssigneeIds.has(stagedIssue.stagedAssigneeId)
+      ) {
+        throw new Error("Staged issue references a missing staged assignee.");
+      }
+    }
+
+    for (const transition of stagedIssueHistory) {
+      if (!stagedIssueIds.has(transition.stagedIssueId)) {
+        throw new Error("Staged issue history references a missing staged issue.");
+      }
+    }
+
+    throwIfAborted(params.signal);
+
+    await tx.jiraProject.deleteMany({
+      where: {
+        jiraConnectionId: params.jiraConnectionId,
+      },
+    });
+    await tx.assignee.deleteMany({
+      where: {
+        jiraConnectionId: params.jiraConnectionId,
+      },
+    });
+
+    const publishedProjectIds = new Map<string, string>();
+    for (const stagedProject of stagedProjects) {
+      throwIfAborted(params.signal);
+
+      const project = await tx.jiraProject.create({
+        data: {
+          jiraConnectionId: params.jiraConnectionId,
+          jiraProjectId: stagedProject.jiraProjectId,
+          key: stagedProject.key,
+          name: stagedProject.name,
+        },
+      });
+
+      publishedProjectIds.set(stagedProject.id, project.id);
+    }
+
+    const publishedAssigneeIds = new Map<string, string>();
+    for (const stagedAssignee of stagedAssignees) {
+      throwIfAborted(params.signal);
+
+      const assignee = await tx.assignee.create({
+        data: {
+          jiraConnectionId: params.jiraConnectionId,
+          jiraAccountId: stagedAssignee.jiraAccountId,
+          displayName: stagedAssignee.displayName,
+          email: stagedAssignee.email,
+          color: stagedAssignee.color,
+        },
+      });
+
+      publishedAssigneeIds.set(stagedAssignee.id, assignee.id);
+    }
+
+    const publishedEpicIds = new Map<string, string>();
+    for (const stagedEpic of stagedEpics) {
+      throwIfAborted(params.signal);
+
+      const jiraProjectId = publishedProjectIds.get(stagedEpic.stagedProjectId);
+
+      if (!jiraProjectId) {
+        throw new Error("Unable to publish an epic without a project.");
+      }
+
+      const epic = await tx.epic.create({
+        data: {
+          jiraProjectId,
+          jiraEpicId: stagedEpic.jiraEpicId,
+          key: stagedEpic.key,
+          summary: stagedEpic.summary,
+          status: stagedEpic.status,
+          rank: stagedEpic.rank,
+          jiraUpdatedAt: stagedEpic.jiraUpdatedAt,
+        },
+      });
+
+      publishedEpicIds.set(stagedEpic.id, epic.id);
+    }
+
+    const publishedIssueIds = new Map<string, string>();
+    for (const stagedIssue of stagedIssues) {
+      throwIfAborted(params.signal);
+
+      const jiraProjectId = publishedProjectIds.get(stagedIssue.stagedProjectId);
+
+      if (!jiraProjectId) {
+        throw new Error("Unable to publish an issue without a project.");
+      }
+
+      const epicId = stagedIssue.stagedEpicId
+        ? publishedEpicIds.get(stagedIssue.stagedEpicId)
+        : null;
+
+      if (stagedIssue.stagedEpicId && !epicId) {
+        throw new Error("Unable to publish an issue with a missing epic.");
+      }
+
+      const assigneeId = stagedIssue.stagedAssigneeId
+        ? publishedAssigneeIds.get(stagedIssue.stagedAssigneeId)
+        : null;
+
+      if (stagedIssue.stagedAssigneeId && !assigneeId) {
+        throw new Error("Unable to publish an issue with a missing assignee.");
+      }
+
+      const issue = await tx.issue.create({
+        data: {
+          jiraProjectId,
+          epicId,
+          assigneeId,
+          jiraIssueId: stagedIssue.jiraIssueId,
+          key: stagedIssue.key,
+          summary: stagedIssue.summary,
+          status: stagedIssue.status,
+          issueType: stagedIssue.issueType,
+          priority: stagedIssue.priority,
+          dueAt: stagedIssue.dueAt,
+          resolvedAt: stagedIssue.resolvedAt,
+          startedAt: stagedIssue.startedAt,
+          markerAt: stagedIssue.markerAt,
+          markerKind: stagedIssue.markerKind,
+          jiraCreatedAt: stagedIssue.jiraCreatedAt,
+          jiraUpdatedAt: stagedIssue.jiraUpdatedAt,
+          rawPayload: toNullablePrismaJson(stagedIssue.rawPayload),
+        },
+      });
+
+      publishedIssueIds.set(stagedIssue.id, issue.id);
+    }
+
+    if (stagedIssueHistory.length > 0) {
+      await tx.issueStatusHistory.createMany({
+        data: stagedIssueHistory.map((transition) => {
+          const issueId = publishedIssueIds.get(transition.stagedIssueId);
+
+          if (!issueId) {
+            throw new Error("Unable to publish issue history without an issue.");
+          }
+
+          return {
+            issueId,
+            syncRunId: params.syncRunId,
+            fromStatus: transition.fromStatus,
+            toStatus: transition.toStatus,
+            changedAt: transition.changedAt,
+          };
+        }),
+      });
+    }
+
+    await cleanupStagedSyncRun(tx, params.syncRunId);
+    await tx.assignee.deleteMany({
+      where: {
+        issues: {
+          none: {},
+        },
+      },
+    });
+    await tx.syncRun.update({
+      where: {
+        id: params.syncRunId,
+      },
+      data: {
+        status: SyncStatus.SUCCEEDED,
+        finishedAt: new Date(),
+        errorMessage: null,
+      },
+    });
+  });
+}
+
 async function failSyncRun(syncRunId: string, error: unknown) {
   const message = isAbortError(error)
     ? "Sync was cancelled."
@@ -627,15 +983,31 @@ async function failSyncRun(syncRunId: string, error: unknown) {
       ? error.message
       : "Unknown Jira sync error.";
 
-  await prisma.syncRun.update({
-    where: {
-      id: syncRunId,
-    },
-    data: {
-      status: SyncStatus.FAILED,
-      finishedAt: new Date(),
-      errorMessage: message,
-    },
+  await prisma.$transaction(async (tx) => {
+    const syncRun = await tx.syncRun.findUnique({
+      where: {
+        id: syncRunId,
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    if (!syncRun || syncRun.status !== SyncStatus.STARTED) {
+      return;
+    }
+
+    await cleanupStagedSyncRun(tx, syncRunId);
+    await tx.syncRun.update({
+      where: {
+        id: syncRunId,
+      },
+      data: {
+        status: SyncStatus.FAILED,
+        finishedAt: new Date(),
+        errorMessage: message,
+      },
+    });
   });
 }
 
@@ -646,6 +1018,10 @@ export async function runJiraSyncChunk({
   maxResults = DEFAULT_JIRA_SYNC_PAGE_SIZE,
   signal,
 }: RunJiraSyncChunkInput): Promise<RunJiraSyncChunkResult> {
+  if (startAt > 0 && !syncRunId) {
+    throw new Error("Chunk continuation requires syncRunId.");
+  }
+
   throwIfAborted(signal);
   const runtime = await resolveJiraRuntimeConfig(signal);
   const requestedJql = jql ?? runtime.defaultJql;
@@ -685,13 +1061,31 @@ export async function runJiraSyncChunk({
     }
   } else {
     throwIfAborted(signal);
-    const syncRun = await prisma.syncRun.create({
-      data: {
-        jiraConnectionId: connection.id,
-        status: SyncStatus.STARTED,
-        startedAt: new Date(),
-        requestedJql,
-      },
+    const syncRun = await prisma.$transaction(async (tx) => {
+      await acquireJiraConnectionLock(tx, connection.id);
+
+      const existingSyncRun = await tx.syncRun.findFirst({
+        where: {
+          jiraConnectionId: connection.id,
+          status: SyncStatus.STARTED,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (existingSyncRun) {
+        throw new Error("Another sync run is already active for this Jira connection.");
+      }
+
+      return tx.syncRun.create({
+        data: {
+          jiraConnectionId: connection.id,
+          status: SyncStatus.STARTED,
+          startedAt: new Date(),
+          requestedJql,
+        },
+      });
     });
 
     activeSyncRunId = syncRun.id;
@@ -706,7 +1100,6 @@ export async function runJiraSyncChunk({
       signal,
     });
     const counts = await persistIssues({
-      jiraConnectionId: connection.id,
       syncRunId: activeSyncRunId,
       issues: page.issues,
       epicLinkFieldId: runtime.epicLinkFieldId,
@@ -723,14 +1116,16 @@ export async function runJiraSyncChunk({
       },
       data: {
         issuesFetched: nextStartAt,
-        ...(hasMore
-          ? {}
-          : {
-              status: SyncStatus.SUCCEEDED,
-              finishedAt: new Date(),
-            }),
       },
     });
+
+    if (!hasMore) {
+      await publishSyncRun({
+        syncRunId: activeSyncRunId,
+        jiraConnectionId: connection.id,
+        signal,
+      });
+    }
 
     return {
       ok: true,

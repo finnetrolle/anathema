@@ -46,13 +46,23 @@ export function deriveAssigneeIdentity(assignee?: {
   name?: string;
   displayName?: string;
 } | null) {
-  return (
-    assignee?.accountId ??
-    assignee?.key ??
-    assignee?.name ??
-    assignee?.displayName ??
-    null
-  );
+  if (assignee?.accountId) {
+    return `accountId:${assignee.accountId}`;
+  }
+
+  if (assignee?.key) {
+    return `key:${assignee.key}`;
+  }
+
+  if (assignee?.name) {
+    return `name:${assignee.name}`;
+  }
+
+  if (assignee?.displayName) {
+    return `displayName:${assignee.displayName}`;
+  }
+
+  return null;
 }
 
 export function deriveAssigneeColor(assigneeIdentity?: string | null) {

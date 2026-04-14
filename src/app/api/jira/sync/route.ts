@@ -19,8 +19,22 @@ export async function POST(request: Request) {
       typeof body.startAt === "number" && Number.isFinite(body.startAt)
         ? Math.max(0, Math.trunc(body.startAt))
         : 0;
+    const isChunkRequest = body.chunked || body.syncRunId || startAt > 0;
+
+    if (startAt > 0 && !body.syncRunId) {
+      return Response.json(
+        {
+          ok: false,
+          message: "Chunk continuation requires syncRunId.",
+        },
+        {
+          status: 400,
+        },
+      );
+    }
+
     const summary =
-      body.chunked || body.syncRunId || startAt > 0
+      isChunkRequest
         ? await runJiraSyncChunk({
             jql: requestedJql,
             syncRunId: body.syncRunId,
