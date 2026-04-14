@@ -16,7 +16,9 @@ Route entrypoints, server-rendered pages, API routes, and app-level metadata.
 
 ### `src/components`
 
-Pure presentational components. The first one is `timeline-board.tsx`, which consumes a prepared view model and knows nothing about Jira.
+UI components that stay on the presentation and interaction side of the boundary.
+`timeline-board.tsx` consumes a prepared view model and knows nothing about Jira
+or Prisma.
 
 ### `src/modules/jira`
 
@@ -31,8 +33,9 @@ Integration boundary with Jira:
 Timeline domain and rendering preparation:
 
 - `types.ts` defines internal view models.
+- `load-dashboard.ts` reads persisted issue data and prepares the dashboard view
+  model.
 - `build-timeline.ts` turns issues into day grid coordinates.
-- `mock-data.ts` keeps the page usable before the sync pipeline is wired to the database.
 
 ### `prisma/schema.prisma`
 
@@ -78,9 +81,31 @@ Stores every observed status transition to make recalculation deterministic when
 
 Lets us audit syncs, detect failures, and later support incremental refreshes.
 
-## Recommended MVP milestones
+## Strengths worth preserving
 
-1. Wire Prisma client and migrations.
-2. Implement Jira sync into the database.
-3. Render the timeline from persisted issue records instead of mock data.
-4. Add filtering and performance guardrails for large epics.
+These qualities already give the project a strong foundation and should stay
+intact during further iteration:
+
+1. Clear module boundaries separate Jira integration, persistence, timeline
+   preparation, and UI rendering, which keeps changes localized.
+2. The Jira adapter owns compatibility concerns such as Cloud vs Server,
+   bearer vs basic auth, API v2 vs v3, and legacy epic-link detection instead
+   of leaking them across the app.
+3. The persistence model stores both normalized timeline fields and the raw
+   Jira payload, which keeps reads fast today without giving up future
+   recalculation or enrichment options.
+4. The UI renders from internal timeline view models rather than Prisma or Jira
+   records directly, which makes the board easier to evolve safely.
+5. `SyncRun` and `IssueStatusHistory` give the project a real operational trail
+   instead of treating sync as a blind fire-and-forget import.
+
+## Current engineering priorities
+
+1. Make sync results atomic or versioned so failed chunked imports do not leave
+   the board in a partially refreshed state.
+2. Push filtering and range narrowing closer to the database so the dashboard
+   does not have to hydrate every issue into memory on each request.
+3. Move workflow-specific status and timezone rules out of hardcoded defaults
+   and into configuration tied to the Jira connection.
+4. Add automated quality gates for build, lint, and a small set of sync and
+   timeline tests.

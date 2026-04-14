@@ -14,13 +14,27 @@ import {
 type SyncResponse = {
   ok?: boolean;
   message?: string;
+  syncRunId?: string;
   requestedJql?: string;
   issuesFetched?: number;
+  pageIssuesFetched?: number;
   projectsSynced?: number;
   epicsSynced?: number;
   assigneesSynced?: number;
   issuesSynced?: number;
   statusTransitionsSynced?: number;
+  summaryFragment?: {
+    projectKeys?: string[];
+    epicKeys?: string[];
+    assigneeIds?: string[];
+  };
+  page?: {
+    total?: number;
+    startAt?: number;
+    pageSize?: number;
+    nextStartAt?: number | null;
+    hasMore?: boolean;
+  };
 };
 
 type SyncSummary = {
@@ -31,6 +45,11 @@ type SyncSummary = {
   assigneesSynced: number;
   issuesSynced: number;
   statusTransitionsSynced: number;
+};
+
+type SyncProgress = {
+  issuesFetched: number;
+  total: number | null;
 };
 
 type SyncNowButtonProps = {
@@ -56,6 +75,7 @@ export function SyncNowButton({
   );
   const [message, setMessage] = useState<string | null>(null);
   const [summary, setSummary] = useState<SyncSummary | null>(null);
+  const [progress, setProgress] = useState<SyncProgress | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestCounterRef = useRef(0);
   const activeRequestIdRef = useRef<number | null>(null);
@@ -70,6 +90,7 @@ export function SyncNowButton({
     setStatus("idle");
     setMessage(null);
     setSummary(null);
+    setProgress(null);
   };
 
   useEffect(() => {
@@ -111,6 +132,7 @@ export function SyncNowButton({
     setStatus("idle");
     setMessage(null);
     setSummary(null);
+    setProgress(null);
   };
 
   const handleSync = async (event: FormEvent<HTMLFormElement>) => {
@@ -126,43 +148,102 @@ export function SyncNowButton({
     setStatus("syncing");
     setMessage(null);
     setSummary(null);
+    setProgress({
+      issuesFetched: 0,
+      total: null,
+    });
 
     try {
       const normalizedJql = jql.trim();
-      const response = await fetch("/api/jira/sync", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(normalizedJql ? { jql: normalizedJql } : {}),
-        signal: controller.signal,
-      });
-      const payload = (await response.json()) as SyncResponse;
+      const projectKeys = new Set<string>();
+      const epicKeys = new Set<string>();
+      const assigneeIds = new Set<string>();
+      let syncRunId: string | undefined;
+      let nextStartAt = 0;
+      let issuesFetched = 0;
+      let issuesSynced = 0;
+      let statusTransitionsSynced = 0;
+      let requestedJql = normalizedJql;
 
-      if (activeRequestIdRef.current !== requestId) {
-        return;
+      while (true) {
+        const response = await fetch("/api/jira/sync", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            chunked: true,
+            ...(normalizedJql ? { jql: normalizedJql } : {}),
+            ...(syncRunId ? { syncRunId } : {}),
+            startAt: nextStartAt,
+          }),
+          signal: controller.signal,
+        });
+        const payload = (await response.json()) as SyncResponse;
+
+        if (activeRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        if (
+          !response.ok ||
+          !payload.ok ||
+          !payload.page ||
+          !payload.summaryFragment
+        ) {
+          setStatus("error");
+          setMessage(payload.message ?? "Не удалось выполнить синхронизацию.");
+          setProgress(null);
+          return;
+        }
+
+        requestedJql = payload.requestedJql ?? requestedJql;
+        issuesFetched = payload.issuesFetched ?? issuesFetched;
+        issuesSynced += payload.issuesSynced ?? 0;
+        statusTransitionsSynced += payload.statusTransitionsSynced ?? 0;
+        syncRunId = payload.syncRunId;
+        nextStartAt = payload.page.nextStartAt ?? issuesFetched;
+
+        for (const projectKey of payload.summaryFragment.projectKeys ?? []) {
+          projectKeys.add(projectKey);
+        }
+
+        for (const epicKey of payload.summaryFragment.epicKeys ?? []) {
+          epicKeys.add(epicKey);
+        }
+
+        for (const assigneeId of payload.summaryFragment.assigneeIds ?? []) {
+          assigneeIds.add(assigneeId);
+        }
+
+        setProgress({
+          issuesFetched,
+          total:
+            typeof payload.page.total === "number"
+              ? payload.page.total
+              : null,
+        });
+
+        if (!payload.page.hasMore) {
+          setSummary({
+            requestedJql,
+            issuesFetched,
+            projectsSynced: projectKeys.size,
+            epicsSynced: epicKeys.size,
+            assigneesSynced: assigneeIds.size,
+            issuesSynced,
+            statusTransitionsSynced,
+          });
+          setProgress(null);
+          setStatus("success");
+
+          startTransition(() => {
+            router.refresh();
+          });
+
+          return;
+        }
       }
-
-      if (!response.ok || !payload.ok) {
-        setStatus("error");
-        setMessage(payload.message ?? "Не удалось выполнить синхронизацию.");
-        return;
-      }
-
-      setSummary({
-        requestedJql: payload.requestedJql ?? normalizedJql,
-        issuesFetched: payload.issuesFetched ?? 0,
-        projectsSynced: payload.projectsSynced ?? 0,
-        epicsSynced: payload.epicsSynced ?? 0,
-        assigneesSynced: payload.assigneesSynced ?? 0,
-        issuesSynced: payload.issuesSynced ?? 0,
-        statusTransitionsSynced: payload.statusTransitionsSynced ?? 0,
-      });
-      setStatus("success");
-
-      startTransition(() => {
-        router.refresh();
-      });
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) {
         return;
@@ -173,6 +254,7 @@ export function SyncNowButton({
       }
 
       setStatus("error");
+      setProgress(null);
       setMessage(
         error instanceof Error
           ? error.message
@@ -263,7 +345,11 @@ export function SyncNowButton({
                       <span aria-hidden="true" className="sync-modal__spinner" />
                       <div>
                         <strong>Синхронизация выполняется</strong>
-                        <p>Загружаем задачи из Jira и обновляем локальные данные.</p>
+                        <p>
+                          {progress?.total
+                            ? `Загружено ${progress.issuesFetched} из ${progress.total} задач из Jira.`
+                            : "Загружаем задачи из Jira и обновляем локальные данные."}
+                        </p>
                       </div>
                     </div>
                   </div>

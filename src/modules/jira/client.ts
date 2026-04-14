@@ -12,6 +12,11 @@ type SearchJiraIssuesInput = {
   signal?: AbortSignal;
 };
 
+type SearchJiraIssuesPageInput = SearchJiraIssuesInput & {
+  startAt?: number;
+  minResults?: number;
+};
+
 type JiraAuthMode = "basic" | "bearer";
 type JiraApiVersion = "2" | "3";
 
@@ -59,6 +64,8 @@ const DEFAULT_FIELDS = [
 ];
 
 const STORY_POINT_NAME_PATTERN = /^story point(s)?( estimate| estimation)?$/i;
+const RETRYABLE_SEARCH_STATUSES = new Set([408, 429, 502, 503, 504]);
+const MIN_JIRA_PAGE_SIZE = 10;
 
 export function readJiraCredentials(): JiraCredentials {
   const connectionName = process.env.JIRA_CONNECTION_NAME ?? "Primary Jira";
@@ -312,6 +319,44 @@ export async function searchJiraIssues({
   const activeRuntime = runtime ?? (await resolveJiraRuntimeConfig(signal));
   const issues: JiraIssue[] = [];
   let startAt = 0;
+
+  while (true) {
+    const page = await searchJiraIssuesPage({
+      jql,
+      startAt,
+      maxResults,
+      runtime: activeRuntime,
+      signal,
+    });
+
+    issues.push(...page.issues);
+
+    const fetchedCount = page.startAt + page.issues.length;
+
+    if (fetchedCount >= page.total || page.issues.length === 0) {
+      break;
+    }
+
+    startAt = fetchedCount;
+  }
+
+  return {
+    issues,
+    runtime: activeRuntime,
+  };
+}
+
+export async function searchJiraIssuesPage({
+  jql,
+  startAt = 0,
+  maxResults = 100,
+  minResults = MIN_JIRA_PAGE_SIZE,
+  runtime,
+  signal,
+}: SearchJiraIssuesPageInput): Promise<
+  JiraSearchResponse & { runtime: JiraRuntimeConfig }
+> {
+  const activeRuntime = runtime ?? (await resolveJiraRuntimeConfig(signal));
   const fields = [
     ...new Set([
       ...DEFAULT_FIELDS,
@@ -320,6 +365,8 @@ export async function searchJiraIssues({
       ...(activeRuntime.developmentFieldIds ?? []),
     ].filter((value): value is string => Boolean(value))),
   ];
+  const normalizedMinResults = Math.max(1, Math.min(minResults, maxResults));
+  let pageSize = Math.max(maxResults, normalizedMinResults);
 
   while (true) {
     throwIfAborted(signal);
@@ -335,7 +382,7 @@ export async function searchJiraIssues({
         body: JSON.stringify({
           jql: jql ?? activeRuntime.defaultJql,
           startAt,
-          maxResults,
+          maxResults: pageSize,
           fields,
           expand: ["changelog"],
         }),
@@ -344,25 +391,26 @@ export async function searchJiraIssues({
       },
     );
 
+    if (!response.ok && RETRYABLE_SEARCH_STATUSES.has(response.status)) {
+      const nextPageSize = Math.max(
+        normalizedMinResults,
+        Math.floor(pageSize / 2),
+      );
+
+      if (nextPageSize < pageSize) {
+        pageSize = nextPageSize;
+        continue;
+      }
+    }
+
     if (!response.ok) {
       throw new Error(`Jira search failed with status ${response.status}.`);
     }
 
     const payload = (await response.json()) as JiraSearchResponse;
-    issues.push(...payload.issues);
-
-    const pageSize = payload.issues.length;
-    const fetchedCount = payload.startAt + pageSize;
-
-    if (fetchedCount >= payload.total || pageSize === 0) {
-      break;
-    }
-
-    startAt = fetchedCount;
+    return {
+      ...payload,
+      runtime: activeRuntime,
+    };
   }
-
-  return {
-    issues,
-    runtime: activeRuntime,
-  };
 }

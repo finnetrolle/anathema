@@ -2,6 +2,7 @@ import { unstable_noStore as noStore } from "next/cache";
 
 import { ProjectFilter } from "@/components/timeline/project-filter";
 import { SyncNowButton } from "@/components/timeline/sync-now-button";
+import { ThemeToggle } from "@/components/timeline/theme-toggle";
 import { TimelineBoard } from "@/components/timeline/timeline-board";
 import { loadTimelineDashboard } from "@/modules/timeline/load-dashboard";
 
@@ -40,6 +41,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="section-header__side">
+            <ThemeToggle />
+
             {dashboard.projectFilter.options.length > 0 ? (
               <ProjectFilter
                 options={dashboard.projectFilter.options}

@@ -553,7 +553,15 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
                       <td>{selectedTask.item.dueLabel ?? "No due date"}</td>
                     </tr>
 
-                    <tr>
+                    <tr
+                      className={
+                        !selectedTask.item.isCompleted &&
+                        selectedTask.item.estimateHours === null &&
+                        selectedTask.item.estimateStoryPoints === null
+                          ? "task-dialog__row--alert"
+                          : undefined
+                      }
+                    >
                       <th scope="row">Estimate</th>
                       <td>{formatEstimateLabel(selectedTask.item)}</td>
                     </tr>
@@ -575,6 +583,30 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
                     <tr>
                       <th scope="row">Author</th>
                       <td>{selectedTask.item.authorName ?? "Author not available"}</td>
+                    </tr>
+
+                    <tr
+                      className={
+                        selectedTask.item.isCompleted &&
+                        selectedTask.item.pullRequestCount === 0
+                          ? "task-dialog__row--alert"
+                          : undefined
+                      }
+                    >
+                      <th scope="row">Pull requests</th>
+                      <td>{selectedTask.item.pullRequestCount}</td>
+                    </tr>
+
+                    <tr
+                      className={
+                        !selectedTask.item.isCompleted &&
+                        selectedTask.item.commitCount === 0
+                          ? "task-dialog__row--alert"
+                          : undefined
+                      }
+                    >
+                      <th scope="row">Commits</th>
+                      <td>{selectedTask.item.commitCount}</td>
                     </tr>
                   </tbody>
                 </table>
