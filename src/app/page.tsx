@@ -1,4 +1,5 @@
 import { unstable_noStore as noStore } from "next/cache";
+import Link from "next/link";
 
 import { ProjectFilter } from "@/components/timeline/project-filter";
 import { SyncNowButton } from "@/components/timeline/sync-now-button";
@@ -99,9 +100,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <button className="timeline-button" type="submit">
                       Apply range
                     </button>
-                    <a className="timeline-button timeline-button--ghost" href="/">
+                    <Link className="timeline-button timeline-button--ghost" href="/">
                       Reset
-                    </a>
+                    </Link>
                   </div>
                 </form>
               </div>

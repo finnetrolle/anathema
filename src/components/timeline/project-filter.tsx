@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ChangeEvent } from "react";
+import { useTransition, type ChangeEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 type ProjectFilterProps = {
@@ -21,17 +21,10 @@ export function ProjectFilter({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
-  const [value, setValue] = useState(selectedProjectId ?? ALL_PROJECTS_VALUE);
-
-  useEffect(() => {
-    setValue(selectedProjectId ?? ALL_PROJECTS_VALUE);
-  }, [selectedProjectId]);
 
   const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextValue = event.target.value;
     const nextSearchParams = new URLSearchParams(searchParams.toString());
-
-    setValue(nextValue);
 
     if (nextValue === ALL_PROJECTS_VALUE) {
       nextSearchParams.delete("project");
@@ -53,8 +46,9 @@ export function ProjectFilter({
       <select
         aria-label="Project"
         className="project-filter__control"
+        defaultValue={selectedProjectId ?? ALL_PROJECTS_VALUE}
+        key={selectedProjectId ?? ALL_PROJECTS_VALUE}
         onChange={handleChange}
-        value={value}
       >
         <option value={ALL_PROJECTS_VALUE}>All projects</option>
         {options.map((option) => (

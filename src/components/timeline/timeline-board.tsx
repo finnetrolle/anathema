@@ -207,7 +207,7 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
 
   useEffect(() => {
     if (!selectedTask) {
-      return;
+      return undefined;
     }
 
     const isTaskVisible = visibleRows.some((row) =>
@@ -215,8 +215,16 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
     );
 
     if (!isTaskVisible) {
-      setSelectedTask(null);
+      const frame = window.requestAnimationFrame(() => {
+        setSelectedTask(null);
+      });
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+      };
     }
+
+    return undefined;
   }, [selectedTask, visibleRows]);
 
   useLayoutEffect(() => {

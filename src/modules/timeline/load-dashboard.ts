@@ -13,8 +13,14 @@ import {
   getDefaultTimelineRange,
   normalizeDayWidth,
   resolveTimelineRange,
-  type TimelineDateBounds,
 } from "@/modules/timeline/build-timeline";
+import {
+  buildIssueDateBounds,
+  buildIssueScopeWhere,
+  buildVisibleIssueWhere,
+  resolveScopedConnectionIds,
+  resolveTimelineTimezones,
+} from "@/modules/timeline/load-dashboard-helpers";
 import {
   normalizeTimelineTimezone,
   normalizeTimelineTimezones,
@@ -130,10 +136,6 @@ const timelineScopeProjectSelect = {
     },
   },
 } satisfies Prisma.JiraProjectSelect;
-
-type TimelineScopeProject = Prisma.JiraProjectGetPayload<{
-  select: typeof timelineScopeProjectSelect;
-}>;
 
 const NO_COMPONENT_LABEL = "No component";
 
@@ -1030,113 +1032,6 @@ function formatProjectLabel(project: TrackedProject) {
   }
 
   return `${project.key} · ${projectName} (${connectionName})`;
-}
-
-function resolveTimelineTimezones(
-  scopedProjects: Array<{
-    connection: {
-      timezone: string;
-    };
-  }>,
-) {
-  return normalizeTimelineTimezones(
-    scopedProjects.map((project) => project.connection.timezone),
-  );
-}
-
-function resolveScopedConnectionIds(
-  scopedProjects: Array<{
-    connection: {
-      id: string;
-    };
-  }>,
-) {
-  return [...new Set(scopedProjects.map((project) => project.connection.id))].sort(
-    (left, right) => left.localeCompare(right),
-  );
-}
-
-function buildIssueScopeWhere(selectedProjectId: string | null): Prisma.IssueWhereInput {
-  return {
-    issueType: {
-      not: "Epic",
-    },
-    ...(selectedProjectId ? { jiraProjectId: selectedProjectId } : {}),
-  };
-}
-
-function pickEarlierDate(...values: Array<Date | null | undefined>) {
-  const dates = values.filter((value): value is Date => value instanceof Date);
-
-  if (dates.length === 0) {
-    return null;
-  }
-
-  return new Date(Math.min(...dates.map(Number)));
-}
-
-function pickLaterDate(...values: Array<Date | null | undefined>) {
-  const dates = values.filter((value): value is Date => value instanceof Date);
-
-  if (dates.length === 0) {
-    return null;
-  }
-
-  return new Date(Math.max(...dates.map(Number)));
-}
-
-function buildIssueDateBounds(summary: {
-  _min: {
-    startedAt: Date | null;
-    markerAt: Date | null;
-  };
-  _max: {
-    startedAt: Date | null;
-    markerAt: Date | null;
-  };
-}): TimelineDateBounds {
-  return {
-    minDate: pickEarlierDate(summary._min.startedAt, summary._min.markerAt),
-    maxDate: pickLaterDate(summary._max.startedAt, summary._max.markerAt),
-  };
-}
-
-function buildVisibleIssueWhere(
-  scopeWhere: Prisma.IssueWhereInput,
-  visibleStart: Date,
-  visibleEnd: Date,
-): Prisma.IssueWhereInput {
-  return {
-    AND: [
-      scopeWhere,
-      {
-        markerAt: {
-          gte: visibleStart,
-        },
-      },
-      {
-        OR: [
-          {
-            startedAt: {
-              lte: visibleEnd,
-            },
-          },
-          {
-            AND: [
-              {
-                startedAt: null,
-              },
-              {
-                markerAt: {
-                  lte: visibleEnd,
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
 }
 
 export async function loadTimelineDashboard({

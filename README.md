@@ -77,6 +77,22 @@ npm run db:push
 npm run dev
 ```
 
+## Quality gates
+
+```bash
+npm run lint
+npm run typecheck
+npm run test
+npm run test:smoke
+npm run check
+```
+
+`npm run test:smoke` now uses a real Postgres-backed smoke gate: it creates a temporary schema on `DATABASE_URL`, runs `prisma db push`, executes sync/dashboard smoke tests, and then drops that schema.
+
+Для локального запуска smoke/check нужен доступный Postgres, например `docker compose up -d postgres`.
+
+`npm run check` aggregates the local quality gates and is also the command used in CI.
+
 ## Next implementation steps
 
 - connect Prisma client and sync runs to the `/api/jira/sync` route
