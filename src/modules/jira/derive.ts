@@ -5,6 +5,10 @@ import {
   normalizeWorkflowStatusName,
   type JiraWorkflowRules,
 } from "@/modules/jira/workflow-rules";
+import {
+  normalizeTimelineTimezone,
+  parseDateOnlyAtHourInTimezone,
+} from "@/modules/timeline/date-helpers";
 import type {
   TimelineIssue,
   TimelineMarkerKind,
@@ -217,6 +221,7 @@ export function deriveTimelineFields(
 export function deriveTimelineTask(
   issue: JiraIssue,
   rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+  timezone?: string | null,
 ): TimelineIssue {
   const assigneeName = issue.fields.assignee?.displayName ?? "Unassigned";
   const componentName =
@@ -244,6 +249,7 @@ export function deriveTimelineTask(
     key: issue.key,
     summary: issue.fields.summary,
     issueUrl: null,
+    timezone: normalizeTimelineTimezone(timezone),
     componentName,
     epicId: issue.fields.parent?.id ?? "ungrouped",
     epicKey: issue.fields.parent?.key ?? "NO-EPIC",
@@ -259,7 +265,11 @@ export function deriveTimelineTask(
     createdAt: issue.fields.created ?? null,
     startAt: timelineFields.startAt,
     dueAt: issue.fields.duedate
-      ? `${issue.fields.duedate}T12:00:00.000Z`
+      ? parseDateOnlyAtHourInTimezone(
+          issue.fields.duedate,
+          normalizeTimelineTimezone(timezone),
+          12,
+        )?.toISOString() ?? null
       : null,
     resolvedAt: issue.fields.resolutiondate ?? null,
     estimateHours:

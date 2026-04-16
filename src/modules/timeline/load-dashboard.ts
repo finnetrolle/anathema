@@ -15,6 +15,10 @@ import {
   resolveTimelineRange,
   type TimelineDateBounds,
 } from "@/modules/timeline/build-timeline";
+import {
+  normalizeTimelineTimezone,
+  normalizeTimelineTimezones,
+} from "@/modules/timeline/date-helpers";
 import type {
   TimelineEpic,
   TimelineMarkerKind,
@@ -78,6 +82,7 @@ const timelineIssueSelect = {
           id: true,
           name: true,
           baseUrl: true,
+          timezone: true,
           workflowRules: true,
         },
       },
@@ -105,13 +110,29 @@ const trackedProjectSelect = {
   name: true,
   connection: {
     select: {
+      id: true,
       name: true,
+      timezone: true,
     },
   },
 } satisfies Prisma.JiraProjectSelect;
 
 type TrackedProject = Prisma.JiraProjectGetPayload<{
   select: typeof trackedProjectSelect;
+}>;
+
+const timelineScopeProjectSelect = {
+  id: true,
+  connection: {
+    select: {
+      id: true,
+      timezone: true,
+    },
+  },
+} satisfies Prisma.JiraProjectSelect;
+
+type TimelineScopeProject = Prisma.JiraProjectGetPayload<{
+  select: typeof timelineScopeProjectSelect;
 }>;
 
 const NO_COMPONENT_LABEL = "No component";
@@ -911,6 +932,7 @@ function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[
       key: issue.key,
       summary: issue.summary,
       issueUrl: buildIssueUrl(issue.project.connection.baseUrl, issue.key),
+      timezone: normalizeTimelineTimezone(issue.project.connection.timezone),
       componentName,
       epicId,
       epicKey: issue.epic?.key ?? "NO-EPIC",
@@ -972,16 +994,22 @@ function normalizeDateInput(value?: string) {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
 }
 
-function buildFallbackRangeInputs(from?: string, to?: string, dayWidth?: string) {
+function buildFallbackRangeInputs(
+  from?: string,
+  to?: string,
+  dayWidth?: string,
+  timezones?: string[] | null,
+) {
   const normalizedFrom = normalizeDateInput(from);
   const normalizedTo = normalizeDateInput(to);
+  const normalizedTimezones = normalizeTimelineTimezones(timezones ?? []);
 
   if (!normalizedFrom && !normalizedTo) {
-    const defaultRange = getDefaultTimelineRange();
+    const defaultRange = getDefaultTimelineRange(new Date(), normalizedTimezones);
 
     return {
-      from: defaultRange.start.toISOString().slice(0, 10),
-      to: defaultRange.end.toISOString().slice(0, 10),
+      from: defaultRange.startDayKey,
+      to: defaultRange.endDayKey,
       dayWidth: String(normalizeDayWidth(dayWidth)),
     };
   }
@@ -1002,6 +1030,30 @@ function formatProjectLabel(project: TrackedProject) {
   }
 
   return `${project.key} · ${projectName} (${connectionName})`;
+}
+
+function resolveTimelineTimezones(
+  scopedProjects: Array<{
+    connection: {
+      timezone: string;
+    };
+  }>,
+) {
+  return normalizeTimelineTimezones(
+    scopedProjects.map((project) => project.connection.timezone),
+  );
+}
+
+function resolveScopedConnectionIds(
+  scopedProjects: Array<{
+    connection: {
+      id: string;
+    };
+  }>,
+) {
+  return [...new Set(scopedProjects.map((project) => project.connection.id))].sort(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 function buildIssueScopeWhere(selectedProjectId: string | null): Prisma.IssueWhereInput {
@@ -1094,16 +1146,9 @@ export async function loadTimelineDashboard({
   project,
 }: LoadTimelineDashboardInput = {}): Promise<TimelineDashboard> {
   try {
-    const [latestSync, trackedProjects] = await Promise.all([
-      prisma.syncRun.findFirst({
-        orderBy: {
-          startedAt: "desc",
-        },
-      }),
-      prisma.jiraProject.findMany({
-        select: trackedProjectSelect,
-      }),
-    ]);
+    const trackedProjects = await prisma.jiraProject.findMany({
+      select: trackedProjectSelect,
+    });
     const projectFilterOptions = trackedProjects
       .map((trackedProject) => ({
         id: trackedProject.id,
@@ -1116,69 +1161,100 @@ export async function loadTimelineDashboard({
       ? project ?? null
       : null;
     const issueScopeWhere = buildIssueScopeWhere(selectedProjectId);
-    const issueSummary = await prisma.issue.aggregate({
-      where: issueScopeWhere,
-      _count: {
-        id: true,
-      },
-      _min: {
-        startedAt: true,
-        markerAt: true,
-      },
-      _max: {
-        startedAt: true,
-        markerAt: true,
-      },
-    });
+    const [issueSummary, scopedProjects] = await Promise.all([
+      prisma.issue.aggregate({
+        where: issueScopeWhere,
+        _count: {
+          id: true,
+        },
+        _min: {
+          startedAt: true,
+          markerAt: true,
+        },
+        _max: {
+          startedAt: true,
+          markerAt: true,
+        },
+      }),
+      prisma.jiraProject.findMany({
+        where: selectedProjectId
+          ? {
+              id: selectedProjectId,
+            }
+          : undefined,
+        select: timelineScopeProjectSelect,
+      }),
+    ]);
+    const timelineTimezones = resolveTimelineTimezones(scopedProjects);
+    const scopedConnectionIds = resolveScopedConnectionIds(scopedProjects);
     const totalIssueCount = issueSummary._count.id;
     const resolvedRange = resolveTimelineRange(
       {
+        timezones: timelineTimezones,
         rangeStart: from,
         rangeEnd: to,
         dayWidth,
       },
       buildIssueDateBounds(issueSummary),
     );
+    const [latestSync, persistedVisibleIssues] = await Promise.all([
+      scopedConnectionIds.length > 0
+        ? prisma.syncRun.findFirst({
+            where: {
+              status: "SUCCEEDED",
+              jiraConnectionId: {
+                in: scopedConnectionIds,
+              },
+            },
+            select: {
+              status: true,
+              issuesFetched: true,
+              requestedJql: true,
+            },
+            orderBy: {
+              startedAt: "desc",
+            },
+          })
+        : null,
+      totalIssueCount > 0
+        ? prisma.issue.findMany({
+            where: buildVisibleIssueWhere(
+              issueScopeWhere,
+              resolvedRange.visibleStart,
+              resolvedRange.visibleEnd,
+            ),
+            select: timelineIssueSelect,
+            orderBy: [
+              {
+                startedAt: "asc",
+              },
+              {
+                markerAt: "asc",
+              },
+            ],
+          })
+        : [],
+    ]);
     const workflowRulesByConnection = new Map<
       string,
       ReturnType<typeof resolveWorkflowRules>
     >();
-    const visibleIssues =
-      totalIssueCount > 0
-        ? (
-            await prisma.issue.findMany({
-              where: buildVisibleIssueWhere(
-                issueScopeWhere,
-                resolvedRange.visibleStart,
-                resolvedRange.visibleEnd,
-              ),
-              select: timelineIssueSelect,
-              orderBy: [
-                {
-                  startedAt: "asc",
-                },
-                {
-                  markerAt: "asc",
-                },
-              ],
-            })
-          ).map((issue) => {
-            let workflowRules = workflowRulesByConnection.get(issue.project.connection.id);
+    const visibleIssues = persistedVisibleIssues.map((issue) => {
+      let workflowRules = workflowRulesByConnection.get(issue.project.connection.id);
 
-            if (!workflowRules) {
-              workflowRules = resolveWorkflowRules(issue.project.connection.workflowRules, {
-                connectionId: issue.project.connection.id,
-                connectionName: issue.project.connection.name,
-              });
-              workflowRulesByConnection.set(issue.project.connection.id, workflowRules);
-            }
+      if (!workflowRules) {
+        workflowRules = resolveWorkflowRules(issue.project.connection.workflowRules, {
+          connectionId: issue.project.connection.id,
+          connectionName: issue.project.connection.name,
+        });
+        workflowRulesByConnection.set(issue.project.connection.id, workflowRules);
+      }
 
-            return {
-              ...issue,
-              derivedTimeline: deriveIssueTimelineState(issue, workflowRules),
-            } satisfies DerivedPersistedTimelineIssue;
-          })
-        : [];
+      return {
+        ...issue,
+        derivedTimeline: deriveIssueTimelineState(issue, workflowRules),
+      } satisfies DerivedPersistedTimelineIssue;
+    });
     const timeline =
       totalIssueCount > 0
         ? buildTimelineModel(toTimelineEpics(visibleIssues), {
@@ -1207,7 +1283,7 @@ export async function loadTimelineDashboard({
             to: timeline.rangeEndInput,
             dayWidth: String(timeline.dayWidth),
           }
-        : buildFallbackRangeInputs(from, to, dayWidth),
+        : buildFallbackRangeInputs(from, to, dayWidth, timelineTimezones),
     };
   } catch (error) {
     const message =

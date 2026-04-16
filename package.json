@@ -10,6 +10,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "node --experimental-default-type=module --experimental-strip-types --test src/modules/timeline/date-helpers.test.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -17,11 +18,13 @@
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
+    "luxon": "^3.7.2",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/luxon": "^3.7.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -29,4 +32,3 @@
     "typescript": "^5.0.0"
   }
 }
-

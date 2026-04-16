@@ -10,6 +10,7 @@ export type TimelineIssue = {
   key: string;
   summary: string;
   issueUrl: string | null;
+  timezone: string;
   componentName: string;
   epicId: string;
   epicKey: string;
@@ -45,8 +46,8 @@ export type TimelineEpic = {
 
 export type TimelineColumn = {
   key: string;
+  dayKey: string;
   label: string;
-  startsAt: string;
   isWeekStart: boolean;
   isToday: boolean;
   weekLabel: string | null;
@@ -94,6 +95,7 @@ export type TimelineRow = {
 };
 
 export type TimelineModel = {
+  timezones: string[];
   columns: TimelineColumn[];
   rows: TimelineRow[];
   legend: TimelineLegendItem[];

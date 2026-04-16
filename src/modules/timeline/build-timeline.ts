@@ -8,23 +8,34 @@ import type {
   TimelineRowItem,
 } from "@/modules/timeline/types";
 import { deriveAssigneeColor } from "@/modules/jira/derive";
+import {
+  addDaysToDayKey,
+  compareDayKeys,
+  formatTimelineDate,
+  formatTimelineDayKey,
+  formatTimelineWeekdayFromDayKey,
+  getDayKey,
+  getDayKeyDistance,
+  getEarlierDayKey,
+  getEndOfDay,
+  getLaterDayKey,
+  getStartOfWeek,
+  getTodayDayKey,
+  isValidDayKey,
+  isWeekStartDayKey,
+  isWeekendDayKey,
+  normalizeTimelineTimezones,
+  parseDateInputInTimezone,
+} from "@/modules/timeline/date-helpers";
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const DATE_FORMATTER = new Intl.DateTimeFormat("ru-RU", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-const WEEKDAY_FORMATTER = new Intl.DateTimeFormat("ru-RU", {
-  weekday: "short",
-  timeZone: "UTC",
-});
 export const DEFAULT_DAY_WIDTH = 72;
 const MIN_DAY_WIDTH = 48;
 const MAX_DAY_WIDTH = 240;
 const DEFAULT_RANGE_SPAN_IN_DAYS = 15;
 
 type TimelineRangeOptions = {
+  timezone?: string | null;
+  timezones?: string[] | null;
   rangeStart?: string | null;
   rangeEnd?: string | null;
   dayWidth?: string | number | null;
@@ -36,8 +47,10 @@ export type TimelineDateBounds = {
 };
 
 export type TimelineResolvedRange = {
-  selectedStart: Date;
-  selectedEnd: Date;
+  timezones: string[];
+  selectedStartDayKey: string;
+  selectedEndDayKey: string;
+  todayDayKeys: string[];
   visibleStart: Date;
   visibleEnd: Date;
   rangeStartInput: string;
@@ -59,59 +72,6 @@ function assertDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function floorToDay(value: Date) {
-  const floored = new Date(value);
-  floored.setUTCHours(0, 0, 0, 0);
-  return floored;
-}
-
-function dayKey(value: Date) {
-  return floorToDay(value).toISOString().slice(0, 10);
-}
-
-function isWeekend(value: Date) {
-  const day = floorToDay(value).getUTCDay();
-  return day === 0 || day === 6;
-}
-
-function isWeekStart(value: Date) {
-  return floorToDay(value).getUTCDay() === 1;
-}
-
-function toWeekLabel(value: Date) {
-  return WEEKDAY_FORMATTER.format(value).replace(".", "").toUpperCase();
-}
-
-function slotLabel(value: Date) {
-  return DATE_FORMATTER.format(value);
-}
-
-function toDateInputValue(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
-function startOfCurrentWeek(value: Date) {
-  const currentDay = floorToDay(value);
-  const weekday = currentDay.getUTCDay();
-  const daysFromMonday = weekday === 0 ? 6 : weekday - 1;
-
-  return new Date(currentDay.getTime() - daysFromMonday * DAY_IN_MS);
-}
-
-function parseDateInput(value?: string | null) {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-
-  const date = new Date(`${value}T00:00:00.000Z`);
-
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function endOfDay(value: Date) {
-  return new Date(floorToDay(value).getTime() + DAY_IN_MS - 1);
-}
-
 function collectDateBounds(dates: Array<Date | null>) {
   const validDates = dates.filter((date): date is Date => date !== null);
 
@@ -128,11 +88,85 @@ function collectDateBounds(dates: Array<Date | null>) {
   } satisfies TimelineDateBounds;
 }
 
-export function getDefaultTimelineRange(now = new Date()) {
-  const start = startOfCurrentWeek(now);
-  const end = new Date(start.getTime() + DEFAULT_RANGE_SPAN_IN_DAYS * DAY_IN_MS);
+function resolveTimezones(
+  values: Array<string | null | undefined> = [],
+) {
+  const normalized = normalizeTimelineTimezones(values);
 
-  return { start, end };
+  return normalized.length > 0 ? normalized : normalizeTimelineTimezones();
+}
+
+function getDefaultDayKeyRange(
+  now = new Date(),
+  timezones: string[] = resolveTimezones(),
+) {
+  const startDayKey = getEarlierDayKey(
+    ...timezones.map((timezone) => getDayKey(getStartOfWeek(now, timezone), timezone)),
+  )!;
+  const endDayKey = getLaterDayKey(
+    ...timezones.map((timezone) =>
+      addDaysToDayKey(getDayKey(getStartOfWeek(now, timezone), timezone), DEFAULT_RANGE_SPAN_IN_DAYS),
+    ),
+  )!;
+
+  return {
+    startDayKey,
+    endDayKey,
+  };
+}
+
+function getVisibleStartForDayKey(dayKey: string, timezones: string[]) {
+  return new Date(
+    Math.min(
+      ...timezones.map((timezone) => parseDateInputInTimezone(dayKey, timezone)!.getTime()),
+    ),
+  );
+}
+
+function getVisibleEndForDayKey(dayKey: string, timezones: string[]) {
+  return new Date(
+    Math.max(
+      ...timezones.map((timezone) =>
+        getEndOfDay(parseDateInputInTimezone(dayKey, timezone)!, timezone).getTime(),
+      ),
+    ),
+  );
+}
+
+function getBoundDayKey(
+  value: Date | null,
+  timezones: string[],
+  direction: "earlier" | "later",
+) {
+  if (!value) {
+    return null;
+  }
+
+  const dayKeys = timezones.map((timezone) => getDayKey(value, timezone));
+
+  return direction === "earlier"
+    ? getEarlierDayKey(...dayKeys)
+    : getLaterDayKey(...dayKeys);
+}
+
+export function getDefaultTimelineRange(
+  now = new Date(),
+  timezoneOrTimezones?: string[] | string | null,
+) {
+  const timezones = resolveTimezones(
+    Array.isArray(timezoneOrTimezones)
+      ? timezoneOrTimezones
+      : [timezoneOrTimezones],
+  );
+  const dayKeyRange = getDefaultDayKeyRange(now, timezones);
+
+  return {
+    timezones,
+    startDayKey: dayKeyRange.startDayKey,
+    endDayKey: dayKeyRange.endDayKey,
+    visibleStart: getVisibleStartForDayKey(dayKeyRange.startDayKey, timezones),
+    visibleEnd: getVisibleEndForDayKey(dayKeyRange.endDayKey, timezones),
+  };
 }
 
 export function normalizeDayWidth(value?: string | number | null) {
@@ -158,93 +192,118 @@ export function resolveTimelineRange(
   dataBounds?: TimelineDateBounds | null,
   now = new Date(),
 ): TimelineResolvedRange {
-  const defaultRange = getDefaultTimelineRange(now);
-  const fallbackMinDate = dataBounds?.minDate ?? now;
-  const fallbackMaxDate = dataBounds?.maxDate ?? now;
+  const timezones = resolveTimezones([
+    ...(options.timezones ?? []),
+    options.timezone,
+  ]);
+  const defaultRange = getDefaultDayKeyRange(now, timezones);
+  const fallbackStartDayKey =
+    getBoundDayKey(dataBounds?.minDate ?? null, timezones, "earlier") ??
+    defaultRange.startDayKey;
+  const fallbackEndDayKey =
+    getBoundDayKey(dataBounds?.maxDate ?? null, timezones, "later") ??
+    defaultRange.endDayKey;
   const hasCustomRange =
     typeof options.rangeStart === "string" || typeof options.rangeEnd === "string";
-  const selectedStart = hasCustomRange
-    ? parseDateInput(options.rangeStart) ?? fallbackMinDate
-    : defaultRange.start;
-  const selectedEndInput = hasCustomRange
-    ? options.rangeEnd
-      ? endOfDay(parseDateInput(options.rangeEnd) ?? fallbackMaxDate)
-      : fallbackMaxDate
-    : endOfDay(defaultRange.end);
-  const selectedEnd =
-    selectedEndInput < selectedStart ? selectedStart : selectedEndInput;
+  const selectedStartDayKey = hasCustomRange
+    ? isValidDayKey(options.rangeStart)
+      ? options.rangeStart!
+      : fallbackStartDayKey
+    : defaultRange.startDayKey;
+  const selectedEndDayKeyCandidate = hasCustomRange
+    ? isValidDayKey(options.rangeEnd)
+      ? options.rangeEnd!
+      : fallbackEndDayKey
+    : defaultRange.endDayKey;
+  const selectedEndDayKey =
+    compareDayKeys(selectedEndDayKeyCandidate, selectedStartDayKey) < 0
+      ? selectedStartDayKey
+      : selectedEndDayKeyCandidate;
 
   return {
-    selectedStart,
-    selectedEnd,
-    visibleStart: floorToDay(selectedStart),
-    visibleEnd: selectedEnd,
-    rangeStartInput: toDateInputValue(selectedStart),
-    rangeEndInput: toDateInputValue(selectedEnd),
+    timezones,
+    selectedStartDayKey,
+    selectedEndDayKey,
+    todayDayKeys: [...new Set(timezones.map((timezone) => getTodayDayKey(timezone, now)))],
+    visibleStart: getVisibleStartForDayKey(selectedStartDayKey, timezones),
+    visibleEnd: getVisibleEndForDayKey(selectedEndDayKey, timezones),
+    rangeStartInput: selectedStartDayKey,
+    rangeEndInput: selectedEndDayKey,
     dayWidth: normalizeDayWidth(options.dayWidth),
   };
 }
 
-function createColumns(minDate: Date, maxDate: Date): TimelineColumn[] {
+function createColumns(
+  startDayKey: string,
+  endDayKey: string,
+  todayDayKeys: string[],
+): TimelineColumn[] {
   const columns: TimelineColumn[] = [];
-  const end = floorToDay(maxDate);
-  const todayKey = dayKey(new Date());
+  const todayKeySet = new Set(todayDayKeys);
 
-  for (let current = floorToDay(minDate); current <= end; ) {
-    if (!isWeekend(current)) {
-      const isWeekStartColumn = isWeekStart(current);
-
-      columns.push({
-        key: current.toISOString(),
-        label: slotLabel(current),
-        startsAt: current.toISOString(),
-        isWeekStart: isWeekStartColumn,
-        isToday: dayKey(current) === todayKey,
-        weekLabel: isWeekStartColumn ? toWeekLabel(current) : null,
-      });
+  for (
+    let currentDayKey = startDayKey;
+    compareDayKeys(currentDayKey, endDayKey) <= 0;
+    currentDayKey = addDaysToDayKey(currentDayKey, 1)
+  ) {
+    if (isWeekendDayKey(currentDayKey)) {
+      continue;
     }
 
-    current = new Date(current.getTime() + DAY_IN_MS);
+    const isWeekStart = isWeekStartDayKey(currentDayKey);
+
+    columns.push({
+      key: currentDayKey,
+      dayKey: currentDayKey,
+      label: formatTimelineDayKey(currentDayKey),
+      isWeekStart,
+      isToday: todayKeySet.has(currentDayKey),
+      weekLabel: isWeekStart ? formatTimelineWeekdayFromDayKey(currentDayKey) : null,
+    });
   }
 
   return columns;
 }
 
 function createColumnIndex(columns: TimelineColumn[]) {
-  return new Map(columns.map((column, index) => [dayKey(new Date(column.startsAt)), index + 1]));
+  return new Map(columns.map((column, index) => [column.dayKey, index + 1]));
 }
 
 function findWorkdayInRange(
-  value: Date,
+  dayKey: string,
   direction: -1 | 1,
-  visibleStart: Date,
-  visibleEnd: Date,
+  visibleStartDayKey: string,
+  visibleEndDayKey: string,
 ) {
-  const min = floorToDay(visibleStart).getTime();
-  const max = floorToDay(visibleEnd).getTime();
-  let current = floorToDay(value);
-
-  while (current.getTime() >= min && current.getTime() <= max) {
-    if (!isWeekend(current)) {
-      return current;
+  for (
+    let currentDayKey = dayKey;
+    compareDayKeys(currentDayKey, visibleStartDayKey) >= 0 &&
+    compareDayKeys(currentDayKey, visibleEndDayKey) <= 0;
+    currentDayKey = addDaysToDayKey(currentDayKey, direction)
+  ) {
+    if (!isWeekendDayKey(currentDayKey)) {
+      return currentDayKey;
     }
-
-    current = new Date(current.getTime() + direction * DAY_IN_MS);
   }
 
   return null;
 }
 
 function findNearestWorkday(
-  value: Date,
-  visibleStart: Date,
-  visibleEnd: Date,
+  dayKey: string,
+  visibleStartDayKey: string,
+  visibleEndDayKey: string,
 ) {
-  const previous = findWorkdayInRange(value, -1, visibleStart, visibleEnd);
-  const next = findWorkdayInRange(value, 1, visibleStart, visibleEnd);
+  const previous = findWorkdayInRange(
+    dayKey,
+    -1,
+    visibleStartDayKey,
+    visibleEndDayKey,
+  );
+  const next = findWorkdayInRange(dayKey, 1, visibleStartDayKey, visibleEndDayKey);
 
   if (previous && next) {
-    return value.getTime() - previous.getTime() <= next.getTime() - value.getTime()
+    return getDayKeyDistance(previous, dayKey) <= getDayKeyDistance(next, dayKey)
       ? previous
       : next;
   }
@@ -252,7 +311,11 @@ function findNearestWorkday(
   return previous ?? next;
 }
 
-function createMarkerLabel(kind: TimelineMarkerKind, value: Date | null) {
+function createMarkerLabel(
+  kind: TimelineMarkerKind,
+  value: Date | null,
+  timezone: string,
+) {
   if (!value) {
     return "No due or done date";
   }
@@ -260,25 +323,29 @@ function createMarkerLabel(kind: TimelineMarkerKind, value: Date | null) {
   const prefix =
     kind === "DONE" ? "Done" : kind === "DUE" ? "Due" : "Observed";
 
-  return `${prefix} · ${DATE_FORMATTER.format(value)}`;
+  return `${prefix} · ${formatTimelineDate(value, timezone)}`;
 }
 
-function createDateLabel(prefix: string, value: Date | null) {
+function createDateLabel(
+  prefix: string,
+  value: Date | null,
+  timezone: string,
+) {
   if (!value) {
     return null;
   }
 
-  return `${prefix} · ${DATE_FORMATTER.format(value)}`;
+  return `${prefix} · ${formatTimelineDate(value, timezone)}`;
 }
 
-function createStartLabel(value: Date | null) {
-  return createDateLabel("Started", value);
+function createStartLabel(value: Date | null, timezone: string) {
+  return createDateLabel("Started", value, timezone);
 }
 
 function buildRowItem(
   columnIndex: Map<string, number>,
-  visibleStart: Date,
-  visibleEnd: Date,
+  visibleStartDayKey: string,
+  visibleEndDayKey: string,
   issue: TimelineIssue,
 ): TimelineRowItem | null {
   const markerDate = assertDate(issue.markerAt);
@@ -292,38 +359,60 @@ function buildRowItem(
     return null;
   }
 
-  if (markerDate < visibleStart || startDate > visibleEnd) {
+  const startDayKey = getDayKey(startDate, issue.timezone);
+  const markerDayKey = getDayKey(markerDate, issue.timezone);
+
+  if (
+    compareDayKeys(markerDayKey, visibleStartDayKey) < 0 ||
+    compareDayKeys(startDayKey, visibleEndDayKey) > 0
+  ) {
     return null;
   }
 
-  const clippedStart = startDate < visibleStart ? visibleStart : startDate;
-  const clippedEnd = markerDate > visibleEnd ? visibleEnd : markerDate;
+  const clippedStartDayKey =
+    compareDayKeys(startDayKey, visibleStartDayKey) < 0
+      ? visibleStartDayKey
+      : startDayKey;
+  const clippedEndDayKey =
+    compareDayKeys(markerDayKey, visibleEndDayKey) > 0
+      ? visibleEndDayKey
+      : markerDayKey;
 
-  if (clippedEnd < visibleStart || clippedStart > visibleEnd) {
+  if (compareDayKeys(clippedEndDayKey, clippedStartDayKey) < 0) {
     return null;
   }
 
-  const displayStart = findWorkdayInRange(clippedStart, 1, visibleStart, visibleEnd);
-  const displayEnd = findWorkdayInRange(clippedEnd, -1, visibleStart, visibleEnd);
+  const displayStartDayKey = findWorkdayInRange(
+    clippedStartDayKey,
+    1,
+    visibleStartDayKey,
+    visibleEndDayKey,
+  );
+  const displayEndDayKey = findWorkdayInRange(
+    clippedEndDayKey,
+    -1,
+    visibleStartDayKey,
+    visibleEndDayKey,
+  );
 
-  if (!displayStart && !displayEnd) {
+  if (!displayStartDayKey && !displayEndDayKey) {
     return null;
   }
 
   if (
-    !displayStart ||
-    !displayEnd ||
-    displayStart.getTime() > displayEnd.getTime()
+    !displayStartDayKey ||
+    !displayEndDayKey ||
+    compareDayKeys(displayStartDayKey, displayEndDayKey) > 0
   ) {
-    const fallbackDate =
-      findNearestWorkday(markerDate, visibleStart, visibleEnd) ??
-      findNearestWorkday(startDate, visibleStart, visibleEnd);
+    const fallbackDayKey =
+      findNearestWorkday(markerDayKey, visibleStartDayKey, visibleEndDayKey) ??
+      findNearestWorkday(startDayKey, visibleStartDayKey, visibleEndDayKey);
 
-    if (!fallbackDate) {
+    if (!fallbackDayKey) {
       return null;
     }
 
-    const column = columnIndex.get(dayKey(fallbackDate));
+    const column = columnIndex.get(fallbackDayKey);
 
     if (!column) {
       return null;
@@ -339,11 +428,11 @@ function buildRowItem(
       statusLabel: issue.status,
       isCompleted: issue.isCompleted,
       markerKind: issue.markerKind,
-      markerLabel: createMarkerLabel(issue.markerKind, markerDate),
-      createdLabel: createDateLabel("Created", createdDate),
-      startLabel: createStartLabel(actualStartDate),
-      dueLabel: createDateLabel("Due", dueDate),
-      resolvedLabel: createDateLabel("Finished", resolvedDate),
+      markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone),
+      createdLabel: createDateLabel("Created", createdDate, issue.timezone),
+      startLabel: createStartLabel(actualStartDate, issue.timezone),
+      dueLabel: createDateLabel("Due", dueDate, issue.timezone),
+      resolvedLabel: createDateLabel("Finished", resolvedDate, issue.timezone),
       estimateHours: issue.estimateHours,
       estimateStoryPoints: issue.estimateStoryPoints,
       observedPeople: issue.observedPeople,
@@ -358,8 +447,8 @@ function buildRowItem(
     };
   }
 
-  const startColumn = columnIndex.get(dayKey(displayStart));
-  const markerColumn = columnIndex.get(dayKey(displayEnd));
+  const startColumn = columnIndex.get(displayStartDayKey);
+  const markerColumn = columnIndex.get(displayEndDayKey);
 
   if (!startColumn || !markerColumn) {
     return null;
@@ -377,11 +466,11 @@ function buildRowItem(
     statusLabel: issue.status,
     isCompleted: issue.isCompleted,
     markerKind: issue.markerKind,
-    markerLabel: createMarkerLabel(issue.markerKind, markerDate),
-    createdLabel: createDateLabel("Created", createdDate),
-    startLabel: createStartLabel(actualStartDate),
-    dueLabel: createDateLabel("Due", dueDate),
-    resolvedLabel: createDateLabel("Finished", resolvedDate),
+    markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone),
+    createdLabel: createDateLabel("Created", createdDate, issue.timezone),
+    startLabel: createStartLabel(actualStartDate, issue.timezone),
+    dueLabel: createDateLabel("Due", dueDate, issue.timezone),
+    resolvedLabel: createDateLabel("Finished", resolvedDate, issue.timezone),
     estimateHours: issue.estimateHours,
     estimateStoryPoints: issue.estimateStoryPoints,
     observedPeople: issue.observedPeople,
@@ -399,8 +488,8 @@ function buildRowItem(
 function buildRows(
   epics: TimelineEpic[],
   columns: TimelineColumn[],
-  visibleStart: Date,
-  visibleEnd: Date,
+  visibleStartDayKey: string,
+  visibleEndDayKey: string,
 ): TimelineRow[] {
   const columnIndex = createColumnIndex(columns);
 
@@ -411,7 +500,9 @@ function buildRows(
       epicKey: epic.key,
       epicSummary: epic.summary,
       items: epic.issues
-        .map((issue) => buildRowItem(columnIndex, visibleStart, visibleEnd, issue))
+        .map((issue) =>
+          buildRowItem(columnIndex, visibleStartDayKey, visibleEndDayKey, issue),
+        )
         .filter((item): item is TimelineRowItem => item !== null)
         .sort((left, right) => left.startColumn - right.startColumn),
     }))
@@ -453,14 +544,28 @@ function buildLegend(epics: TimelineEpic[]) {
     }));
 }
 
+function collectTimelineTimezones(
+  epics: TimelineEpic[],
+  options: BuildTimelineOptions,
+) {
+  return resolveTimezones([
+    ...(options.timezones ?? []),
+    options.timezone,
+    ...epics.flatMap((epic) => epic.issues.map((issue) => issue.timezone)),
+  ]);
+}
+
 export function buildTimelineModel(
   epics: TimelineEpic[],
   options: BuildTimelineOptions = {},
 ): TimelineModel {
+  const timezones =
+    options.resolvedRange?.timezones ?? collectTimelineTimezones(epics, options);
   const resolvedRange =
     options.resolvedRange ??
     resolveTimelineRange(
       {
+        timezones,
         rangeStart: options.rangeStart,
         rangeEnd: options.rangeEnd,
         dayWidth: options.dayWidth,
@@ -472,27 +577,25 @@ export function buildTimelineModel(
       ),
     );
   const columns = createColumns(
-    resolvedRange.selectedStart,
-    resolvedRange.selectedEnd,
+    resolvedRange.selectedStartDayKey,
+    resolvedRange.selectedEndDayKey,
+    resolvedRange.todayDayKeys,
   );
   const rows = buildRows(
     epics,
     columns,
-    resolvedRange.visibleStart,
-    resolvedRange.visibleEnd,
+    resolvedRange.selectedStartDayKey,
+    resolvedRange.selectedEndDayKey,
   );
-  const rangeLabelStart = columns[0]?.startsAt
-    ? new Date(columns[0].startsAt)
-    : floorToDay(resolvedRange.selectedStart);
-  const rangeLabelEnd = columns.at(-1)?.startsAt
-    ? new Date(columns.at(-1)!.startsAt)
-    : floorToDay(resolvedRange.selectedEnd);
+  const rangeLabelStart = columns[0]?.dayKey ?? resolvedRange.selectedStartDayKey;
+  const rangeLabelEnd = columns.at(-1)?.dayKey ?? resolvedRange.selectedEndDayKey;
 
   return {
+    timezones: resolvedRange.timezones,
     columns,
     rows,
     legend: buildLegend(epics),
-    rangeLabel: `${DATE_FORMATTER.format(rangeLabelStart)} - ${DATE_FORMATTER.format(
+    rangeLabel: `${formatTimelineDayKey(rangeLabelStart)} - ${formatTimelineDayKey(
       rangeLabelEnd,
     )}`,
     rangeStartInput: resolvedRange.rangeStartInput,

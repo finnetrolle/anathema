@@ -20,6 +20,10 @@ import {
   resolveWorkflowRules,
   type JiraWorkflowRules,
 } from "@/modules/jira/workflow-rules";
+import {
+  normalizeTimelineTimezone,
+  parseDateOnlyAtHourInTimezone,
+} from "@/modules/timeline/date-helpers";
 import type { TimelineMarkerKind } from "@/modules/timeline/types";
 
 const DEFAULT_JIRA_SYNC_PAGE_SIZE = 25;
@@ -111,15 +115,21 @@ function readEpicLinkKey(issue: JiraIssue, epicLinkFieldId?: string) {
   return null;
 }
 
-function parseJiraDate(value?: string | null) {
+function parseJiraDate(value?: string | null, timezone?: string | null) {
   if (!value) {
     return null;
   }
 
-  const normalizedValue = /^\d{4}-\d{2}-\d{2}$/.test(value)
-    ? `${value}T12:00:00.000Z`
-    : value;
-  const parsed = new Date(normalizedValue);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    // Keep Jira date-only values anchored to the connection's local calendar day.
+    return parseDateOnlyAtHourInTimezone(
+      value,
+      normalizeTimelineTimezone(timezone),
+      12,
+    );
+  }
+
+  const parsed = new Date(value);
 
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -393,6 +403,7 @@ async function runWithAbortCheck<T>(
 
 async function persistIssues(params: {
   syncRunId: string;
+  timezone: string;
   issues: JiraIssue[];
   workflowRules: JiraWorkflowRules;
   epicLinkFieldId?: string;
@@ -509,13 +520,16 @@ async function persistIssues(params: {
             status: issue.fields.status?.name ?? "Unknown",
             issueType: issue.fields.issuetype?.name ?? "Unknown",
             priority: issue.fields.priority?.name ?? null,
-            dueAt: parseJiraDate(issue.fields.duedate),
-            resolvedAt: parseJiraDate(issue.fields.resolutiondate),
-            startedAt: parseJiraDate(timelineFields.startAt),
-            markerAt: parseJiraDate(timelineFields.markerAt),
+            dueAt: parseJiraDate(issue.fields.duedate, params.timezone),
+            resolvedAt: parseJiraDate(
+              issue.fields.resolutiondate,
+              params.timezone,
+            ),
+            startedAt: parseJiraDate(timelineFields.startAt, params.timezone),
+            markerAt: parseJiraDate(timelineFields.markerAt, params.timezone),
             markerKind: toPrismaMarkerKind(timelineFields.markerKind),
-            jiraCreatedAt: parseJiraDate(issue.fields.created),
-            jiraUpdatedAt: parseJiraDate(issue.fields.updated),
+            jiraCreatedAt: parseJiraDate(issue.fields.created, params.timezone),
+            jiraUpdatedAt: parseJiraDate(issue.fields.updated, params.timezone),
             rawPayload: toPrismaJson(
               buildRawPayload(
                 issue,
@@ -535,13 +549,16 @@ async function persistIssues(params: {
             status: issue.fields.status?.name ?? "Unknown",
             issueType: issue.fields.issuetype?.name ?? "Unknown",
             priority: issue.fields.priority?.name ?? null,
-            dueAt: parseJiraDate(issue.fields.duedate),
-            resolvedAt: parseJiraDate(issue.fields.resolutiondate),
-            startedAt: parseJiraDate(timelineFields.startAt),
-            markerAt: parseJiraDate(timelineFields.markerAt),
+            dueAt: parseJiraDate(issue.fields.duedate, params.timezone),
+            resolvedAt: parseJiraDate(
+              issue.fields.resolutiondate,
+              params.timezone,
+            ),
+            startedAt: parseJiraDate(timelineFields.startAt, params.timezone),
+            markerAt: parseJiraDate(timelineFields.markerAt, params.timezone),
             markerKind: toPrismaMarkerKind(timelineFields.markerKind),
-            jiraCreatedAt: parseJiraDate(issue.fields.created),
-            jiraUpdatedAt: parseJiraDate(issue.fields.updated),
+            jiraCreatedAt: parseJiraDate(issue.fields.created, params.timezone),
+            jiraUpdatedAt: parseJiraDate(issue.fields.updated, params.timezone),
             rawPayload: toPrismaJson(
               buildRawPayload(
                 issue,
@@ -1110,6 +1127,7 @@ export async function runJiraSyncChunk({
     });
     const counts = await persistIssues({
       syncRunId: activeSyncRunId,
+      timezone: runtime.timezone,
       issues: page.issues,
       workflowRules,
       epicLinkFieldId: runtime.epicLinkFieldId,
