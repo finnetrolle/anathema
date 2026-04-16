@@ -25,6 +25,7 @@ model JiraConnection {
   baseUrl    String        @unique
   defaultJql String?
   timezone   String        @default("Europe/Moscow")
+  workflowRules Json?
   projects   JiraProject[]
   assignees  Assignee[]
   syncRuns   SyncRun[]

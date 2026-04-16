@@ -16,6 +16,10 @@ import {
   deriveTimelineFields,
 } from "@/modules/jira/derive";
 import type { JiraIssue } from "@/modules/jira/types";
+import {
+  resolveWorkflowRules,
+  type JiraWorkflowRules,
+} from "@/modules/jira/workflow-rules";
 import type { TimelineMarkerKind } from "@/modules/timeline/types";
 
 const DEFAULT_JIRA_SYNC_PAGE_SIZE = 25;
@@ -390,6 +394,7 @@ async function runWithAbortCheck<T>(
 async function persistIssues(params: {
   syncRunId: string;
   issues: JiraIssue[];
+  workflowRules: JiraWorkflowRules;
   epicLinkFieldId?: string;
   storyPointFieldIds?: string[];
   developmentFieldIds?: string[];
@@ -485,7 +490,7 @@ async function persistIssues(params: {
       epics.add(stagedEpic.key);
     }
 
-    const timelineFields = deriveTimelineFields(issue);
+    const timelineFields = deriveTimelineFields(issue, params.workflowRules);
     const persistedIssue = await runWithAbortCheck(
       () =>
         prisma.stagedIssue.upsert({
@@ -1031,6 +1036,10 @@ export async function runJiraSyncChunk({
     runtime,
     signal,
   });
+  const workflowRules = resolveWorkflowRules(connection.workflowRules, {
+    connectionId: connection.id,
+    connectionName: connection.name,
+  });
 
   let activeSyncRunId = syncRunId;
 
@@ -1102,6 +1111,7 @@ export async function runJiraSyncChunk({
     const counts = await persistIssues({
       syncRunId: activeSyncRunId,
       issues: page.issues,
+      workflowRules,
       epicLinkFieldId: runtime.epicLinkFieldId,
       storyPointFieldIds: runtime.storyPointFieldIds,
       developmentFieldIds: runtime.developmentFieldIds,

@@ -1,23 +1,14 @@
 import type { JiraIssue } from "@/modules/jira/types";
+import {
+  getDefaultWorkflowRules,
+  normalizeStatusCategoryKey,
+  normalizeWorkflowStatusName,
+  type JiraWorkflowRules,
+} from "@/modules/jira/workflow-rules";
 import type {
   TimelineIssue,
   TimelineMarkerKind,
 } from "@/modules/timeline/types";
-
-const IN_PROGRESS_STATUSES = new Set([
-  "In Progress",
-  "Development",
-  "Coding",
-  "Code Review",
-  "In QA",
-  "QA",
-]);
-const DONE_STATUSES = new Set([
-  "Done",
-  "Closed",
-  "Resolved",
-  "Completed",
-]);
 
 const FALLBACK_ASSIGNEE_COLOR = "#8ec5ff";
 
@@ -73,15 +64,56 @@ export function deriveAssigneeColor(assigneeIdentity?: string | null) {
   return hashAssigneeColor(assigneeIdentity);
 }
 
-export function isInProgressStatus(status?: string | null) {
-  return status ? IN_PROGRESS_STATUSES.has(status) : false;
+function readStatusCategoryKey(status?: JiraIssue["fields"]["status"] | null) {
+  return normalizeStatusCategoryKey(status?.statusCategory?.key);
 }
 
-export function isDoneStatus(status?: string | null) {
-  return status ? DONE_STATUSES.has(status) : false;
+export function isInProgressStatus(
+  status?: string | null,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+  statusCategoryKey?: string | null,
+) {
+  const normalizedCategoryKey = normalizeStatusCategoryKey(statusCategoryKey);
+
+  if (normalizedCategoryKey === "indeterminate") {
+    return true;
+  }
+
+  if (normalizedCategoryKey === "done" || normalizedCategoryKey === "new") {
+    return false;
+  }
+
+  const normalizedStatus = normalizeWorkflowStatusName(status);
+
+  return normalizedStatus
+    ? rules.inProgressStatusSet.has(normalizedStatus)
+    : false;
 }
 
-export function deriveStartedAt(issue: JiraIssue) {
+export function isDoneStatus(
+  status?: string | null,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+  statusCategoryKey?: string | null,
+) {
+  const normalizedCategoryKey = normalizeStatusCategoryKey(statusCategoryKey);
+
+  if (normalizedCategoryKey === "done") {
+    return true;
+  }
+
+  if (normalizedCategoryKey === "indeterminate" || normalizedCategoryKey === "new") {
+    return false;
+  }
+
+  const normalizedStatus = normalizeWorkflowStatusName(status);
+
+  return normalizedStatus ? rules.doneStatusSet.has(normalizedStatus) : false;
+}
+
+export function deriveStartedAt(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+) {
   const histories = issue.changelog?.histories ?? [];
   const sortedHistories = [...histories].sort((left, right) =>
     left.created.localeCompare(right.created),
@@ -92,7 +124,7 @@ export function deriveStartedAt(issue: JiraIssue) {
       (item) =>
         item.field === "status" &&
         item.toString &&
-        isInProgressStatus(item.toString),
+        isInProgressStatus(item.toString, rules),
     );
 
     if (movedIntoProgress) {
@@ -103,13 +135,55 @@ export function deriveStartedAt(issue: JiraIssue) {
   return null;
 }
 
-export function deriveMarker(issue: JiraIssue): {
+function deriveDoneAt(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+) {
+  const histories = issue.changelog?.histories ?? [];
+  const sortedHistories = [...histories].sort((left, right) =>
+    left.created.localeCompare(right.created),
+  );
+  let doneAt: string | null = null;
+
+  for (const history of sortedHistories) {
+    const movedIntoDone = history.items.some(
+      (item) =>
+        item.field === "status" &&
+        item.toString &&
+        isDoneStatus(item.toString, rules) &&
+        !isDoneStatus(item.fromString, rules),
+    );
+
+    if (movedIntoDone) {
+      doneAt = history.created;
+    }
+  }
+
+  return doneAt;
+}
+
+export function deriveMarker(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+): {
   markerAt: string | null;
   markerKind: TimelineMarkerKind;
 } {
+  const statusCategoryKey = readStatusCategoryKey(issue.fields.status);
+
   if (issue.fields.resolutiondate) {
     return {
       markerAt: issue.fields.resolutiondate,
+      markerKind: "DONE" as const,
+    };
+  }
+
+  if (isDoneStatus(issue.fields.status?.name, rules, statusCategoryKey)) {
+    return {
+      // Prefer the real completion transition when possible. If we cannot infer
+      // it, use the latest observed Jira timestamp so recently completed work
+      // stays visible until workflow rules are configured more precisely.
+      markerAt: deriveDoneAt(issue, rules) ?? issue.fields.updated ?? issue.fields.created ?? null,
       markerKind: "DONE" as const,
     };
   }
@@ -127,17 +201,23 @@ export function deriveMarker(issue: JiraIssue): {
   };
 }
 
-export function deriveTimelineFields(issue: JiraIssue) {
-  const marker = deriveMarker(issue);
+export function deriveTimelineFields(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+) {
+  const marker = deriveMarker(issue, rules);
 
   return {
-    startAt: deriveStartedAt(issue),
+    startAt: deriveStartedAt(issue, rules),
     markerAt: marker.markerAt,
     markerKind: marker.markerKind,
   };
 }
 
-export function deriveTimelineTask(issue: JiraIssue): TimelineIssue {
+export function deriveTimelineTask(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+): TimelineIssue {
   const assigneeName = issue.fields.assignee?.displayName ?? "Unassigned";
   const componentName =
     issue.fields.components
@@ -147,7 +227,8 @@ export function deriveTimelineTask(issue: JiraIssue): TimelineIssue {
   const assigneeColor = deriveAssigneeColor(
     deriveAssigneeIdentity(issue.fields.assignee),
   );
-  const timelineFields = deriveTimelineFields(issue);
+  const statusCategoryKey = readStatusCategoryKey(issue.fields.status);
+  const timelineFields = deriveTimelineFields(issue, rules);
   const observedPeople = Array.from(
     new Set(
       [
@@ -170,7 +251,11 @@ export function deriveTimelineTask(issue: JiraIssue): TimelineIssue {
     assigneeName,
     assigneeColor,
     status: issue.fields.status?.name ?? "Unknown",
-    isCompleted: isDoneStatus(issue.fields.status?.name),
+    isCompleted: isDoneStatus(
+      issue.fields.status?.name,
+      rules,
+      statusCategoryKey,
+    ),
     createdAt: issue.fields.created ?? null,
     startAt: timelineFields.startAt,
     dueAt: issue.fields.duedate
@@ -197,6 +282,6 @@ export function deriveTimelineTask(issue: JiraIssue): TimelineIssue {
     commitCount: 0,
     isMissingDueDate:
       timelineFields.markerKind === "NONE" &&
-      isInProgressStatus(issue.fields.status?.name),
+      isInProgressStatus(issue.fields.status?.name, rules, statusCategoryKey),
   };
 }

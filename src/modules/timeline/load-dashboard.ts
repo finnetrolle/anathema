@@ -1,7 +1,13 @@
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
-import { isDoneStatus, isInProgressStatus } from "@/modules/jira/derive";
+import {
+  deriveTimelineFields,
+  isDoneStatus,
+  isInProgressStatus,
+} from "@/modules/jira/derive";
+import type { JiraIssue } from "@/modules/jira/types";
+import { resolveWorkflowRules } from "@/modules/jira/workflow-rules";
 import {
   buildTimelineModel,
   getDefaultTimelineRange,
@@ -11,6 +17,7 @@ import {
 } from "@/modules/timeline/build-timeline";
 import type {
   TimelineEpic,
+  TimelineMarkerKind,
   TimelinePullRequestStatus,
 } from "@/modules/timeline/types";
 
@@ -68,7 +75,10 @@ const timelineIssueSelect = {
     select: {
       connection: {
         select: {
+          id: true,
+          name: true,
           baseUrl: true,
+          workflowRules: true,
         },
       },
     },
@@ -78,6 +88,16 @@ const timelineIssueSelect = {
 type PersistedTimelineIssue = Prisma.IssueGetPayload<{
   select: typeof timelineIssueSelect;
 }>;
+
+type DerivedPersistedTimelineIssue = PersistedTimelineIssue & {
+  derivedTimeline: {
+    startAt: Date | null;
+    markerAt: Date | null;
+    markerKind: TimelineMarkerKind;
+    isCompleted: boolean;
+    isMissingDueDate: boolean;
+  };
+};
 
 const trackedProjectSelect = {
   id: true,
@@ -108,11 +128,17 @@ type RawPayloadIssue = {
     creator?: RawPayloadUser | null;
     reporter?: RawPayloadUser | null;
     assignee?: RawPayloadUser | null;
+    status?: {
+      statusCategory?: {
+        key?: string | null;
+      } | null;
+    } | null;
     timeoriginalestimate?: number | string | null;
     aggregatetimeoriginalestimate?: number | string | null;
   } & Record<string, unknown>;
   changelog?: {
     histories?: Array<{
+      id?: string;
       created?: string;
       items?: Array<{
         field?: string;
@@ -687,6 +713,98 @@ function deriveAuthorName(rawPayload: Prisma.JsonValue | null) {
   );
 }
 
+function deriveStatusCategoryKey(rawPayload: Prisma.JsonValue | null) {
+  const payload = readRawPayload(rawPayload);
+
+  return payload?.fields?.status?.statusCategory?.key ?? null;
+}
+
+function parseDerivedDate(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildIssueForTimelineDerivation(
+  issue: PersistedTimelineIssue,
+): JiraIssue | null {
+  const payload = readRawPayload(issue.rawPayload);
+
+  if (!payload?.fields) {
+    return null;
+  }
+
+  const histories: NonNullable<JiraIssue["changelog"]>["histories"] = [];
+
+  for (const [historyIndex, history] of (payload.changelog?.histories ?? []).entries()) {
+    if (typeof history.created !== "string") {
+      continue;
+    }
+
+    const items =
+      history.items
+        ?.filter(
+          (
+            item,
+          ): item is {
+            field: string;
+            fromString?: string | null;
+            toString?: string | null;
+          } => typeof item.field === "string",
+        )
+        .map((item) => ({
+          field: item.field,
+          fromString: item.fromString ?? null,
+          toString: item.toString ?? null,
+        })) ?? [];
+
+    histories.push({
+      id: history.id ?? `${issue.key}:history:${historyIndex}`,
+      created: history.created,
+      items,
+    });
+  }
+
+  return {
+    id: issue.key,
+    key: issue.key,
+    fields: payload.fields as JiraIssue["fields"],
+    changelog: {
+      histories,
+    },
+  };
+}
+
+function deriveIssueTimelineState(
+  issue: PersistedTimelineIssue,
+  workflowRules: ReturnType<typeof resolveWorkflowRules>,
+): DerivedPersistedTimelineIssue["derivedTimeline"] {
+  const statusCategoryKey = deriveStatusCategoryKey(issue.rawPayload);
+  const issueForDerivation = buildIssueForTimelineDerivation(issue);
+  const derivedTimelineFields = issueForDerivation
+    ? deriveTimelineFields(issueForDerivation, workflowRules)
+    : null;
+  const markerKind = derivedTimelineFields?.markerKind ?? issue.markerKind;
+
+  return {
+    startAt: derivedTimelineFields
+      ? parseDerivedDate(derivedTimelineFields.startAt)
+      : issue.startedAt,
+    markerAt: derivedTimelineFields
+      ? parseDerivedDate(derivedTimelineFields.markerAt)
+      : issue.markerAt,
+    markerKind,
+    isCompleted: isDoneStatus(issue.status, workflowRules, statusCategoryKey),
+    isMissingDueDate:
+      markerKind === "NONE" &&
+      isInProgressStatus(issue.status, workflowRules, statusCategoryKey),
+  };
+}
+
 function deriveEstimateHours(rawPayload: Prisma.JsonValue | null) {
   const payload = readRawPayload(rawPayload);
   const estimateInSeconds =
@@ -776,7 +894,7 @@ function deriveObservedPeople(
   return observedPeople;
 }
 
-function toTimelineEpics(issues: PersistedTimelineIssue[]): TimelineEpic[] {
+function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[] {
   const groupedEpics = new Map<string, TimelineEpic>();
 
   for (const issue of issues) {
@@ -800,9 +918,9 @@ function toTimelineEpics(issues: PersistedTimelineIssue[]): TimelineEpic[] {
       assigneeName,
       assigneeColor: issue.assignee?.color ?? "#8ec5ff",
       status: issue.status,
-      isCompleted: isDoneStatus(issue.status),
+      isCompleted: issue.derivedTimeline.isCompleted,
       createdAt: issue.jiraCreatedAt?.toISOString() ?? null,
-      startAt: issue.startedAt?.toISOString() ?? null,
+      startAt: issue.derivedTimeline.startAt?.toISOString() ?? null,
       dueAt: issue.dueAt?.toISOString() ?? null,
       resolvedAt: issue.resolvedAt?.toISOString() ?? null,
       estimateHours: deriveEstimateHours(issue.rawPayload),
@@ -810,13 +928,12 @@ function toTimelineEpics(issues: PersistedTimelineIssue[]): TimelineEpic[] {
       observedPeople: deriveObservedPeople(issue.rawPayload, assigneeName),
       assigneeHistory,
       authorName,
-      markerAt: issue.markerAt?.toISOString() ?? null,
-      markerKind: issue.markerKind,
+      markerAt: issue.derivedTimeline.markerAt?.toISOString() ?? null,
+      markerKind: issue.derivedTimeline.markerKind,
       pullRequestStatus: developmentSummary.pullRequestStatus,
       pullRequestCount: developmentSummary.pullRequestCount,
       commitCount: developmentSummary.commitCount,
-      isMissingDueDate:
-        issue.markerKind === "NONE" && isInProgressStatus(issue.status),
+      isMissingDueDate: issue.derivedTimeline.isMissingDueDate,
     } satisfies TimelineEpic["issues"][number];
 
     if (existingEpic) {
@@ -1022,28 +1139,49 @@ export async function loadTimelineDashboard({
       },
       buildIssueDateBounds(issueSummary),
     );
-    const issues =
+    const workflowRulesByConnection = new Map<
+      string,
+      ReturnType<typeof resolveWorkflowRules>
+    >();
+    const visibleIssues =
       totalIssueCount > 0
-        ? await prisma.issue.findMany({
-            where: buildVisibleIssueWhere(
-              issueScopeWhere,
-              resolvedRange.visibleStart,
-              resolvedRange.visibleEnd,
-            ),
-            select: timelineIssueSelect,
-            orderBy: [
-              {
-                startedAt: "asc",
-              },
-              {
-                markerAt: "asc",
-              },
-            ],
+        ? (
+            await prisma.issue.findMany({
+              where: buildVisibleIssueWhere(
+                issueScopeWhere,
+                resolvedRange.visibleStart,
+                resolvedRange.visibleEnd,
+              ),
+              select: timelineIssueSelect,
+              orderBy: [
+                {
+                  startedAt: "asc",
+                },
+                {
+                  markerAt: "asc",
+                },
+              ],
+            })
+          ).map((issue) => {
+            let workflowRules = workflowRulesByConnection.get(issue.project.connection.id);
+
+            if (!workflowRules) {
+              workflowRules = resolveWorkflowRules(issue.project.connection.workflowRules, {
+                connectionId: issue.project.connection.id,
+                connectionName: issue.project.connection.name,
+              });
+              workflowRulesByConnection.set(issue.project.connection.id, workflowRules);
+            }
+
+            return {
+              ...issue,
+              derivedTimeline: deriveIssueTimelineState(issue, workflowRules),
+            } satisfies DerivedPersistedTimelineIssue;
           })
         : [];
     const timeline =
       totalIssueCount > 0
-        ? buildTimelineModel(toTimelineEpics(issues), {
+        ? buildTimelineModel(toTimelineEpics(visibleIssues), {
             resolvedRange,
           })
         : null;

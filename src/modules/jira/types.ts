@@ -20,6 +20,10 @@ export type JiraIssueFields = {
   };
   status?: {
     name: string;
+    statusCategory?: {
+      key?: string | null;
+      name?: string | null;
+    } | null;
   };
   priority?: {
     name: string;
