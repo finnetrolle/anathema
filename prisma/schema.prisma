@@ -13,6 +13,36 @@ enum SyncStatus {
   FAILED
 }
 
+enum DailyBriefScopeType {
+  TEAM
+  PERSON
+  PROJECT
+}
+
+enum DailyBriefRunStatus {
+  SUCCEEDED
+  FAILED
+}
+
+enum DailyBriefItemType {
+  COMPLETED
+  STARTED
+  STALE_IN_PROGRESS
+  OVERDUE
+  MISSING_DUE_DATE
+  MISSING_ESTIMATE
+  NO_CODE_ACTIVITY
+  OWNERSHIP_CHANGED
+  DONE_WITHOUT_PR
+  REOPENED
+}
+
+enum DailyBriefImportance {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 enum TimelineMarkerKind {
   DONE
   DUE
@@ -20,17 +50,18 @@ enum TimelineMarkerKind {
 }
 
 model JiraConnection {
-  id         String        @id @default(cuid())
-  name       String
-  baseUrl    String        @unique
-  defaultJql String?
-  timezone   String        @default("Europe/Moscow")
-  workflowRules Json?
-  projects   JiraProject[]
-  assignees  Assignee[]
-  syncRuns   SyncRun[]
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id             String          @id @default(cuid())
+  name           String
+  baseUrl        String          @unique
+  defaultJql     String?
+  timezone       String          @default("Europe/Moscow")
+  workflowRules  Json?
+  projects       JiraProject[]
+  assignees      Assignee[]
+  syncRuns       SyncRun[]
+  dailyBriefRuns DailyBriefRun[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 }
 
 model JiraProject {
@@ -60,6 +91,7 @@ model SyncRun {
   errorMessage       String?
   connection         JiraConnection             @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
   issueHistory       IssueStatusHistory[]
+  dailyBriefRuns     DailyBriefRun[]
   stagedProjects     StagedJiraProject[]
   stagedEpics        StagedEpic[]
   stagedAssignees    StagedAssignee[]
@@ -252,4 +284,51 @@ model IssueStatusHistory {
 
   @@unique([issueId, changedAt, toStatus])
   @@index([issueId, changedAt])
+}
+
+model DailyBriefRun {
+  id               String              @id @default(cuid())
+  jiraConnectionId String
+  syncRunId        String?
+  generatedForDate DateTime
+  windowStart      DateTime
+  windowEnd        DateTime
+  scopeType        DailyBriefScopeType
+  scopeKey         String
+  scopeLabel       String
+  status           DailyBriefRunStatus
+  summaryJson      Json
+  connection       JiraConnection      @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  syncRun          SyncRun?            @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+  items            DailyBriefItem[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@unique([jiraConnectionId, generatedForDate, windowStart, windowEnd, scopeType, scopeKey])
+  @@index([generatedForDate, scopeType, scopeKey])
+  @@index([jiraConnectionId, generatedForDate])
+}
+
+model DailyBriefItem {
+  id              String                @id @default(cuid())
+  dailyBriefRunId String
+  issueJiraId     String?
+  issueKey        String
+  issueSummary    String
+  issueUrl        String?
+  assigneeName    String
+  projectKey      String
+  projectName     String
+  epicKey         String?
+  epicSummary     String?
+  componentName   String
+  itemType        DailyBriefItemType
+  importance      DailyBriefImportance
+  headline        String
+  detailsJson     Json
+  dailyBriefRun   DailyBriefRun         @relation(fields: [dailyBriefRunId], references: [id], onDelete: Cascade)
+  createdAt       DateTime              @default(now())
+
+  @@index([dailyBriefRunId, itemType, importance])
+  @@index([issueKey])
 }

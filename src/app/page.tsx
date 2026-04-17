@@ -44,6 +44,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-header__side">
             <ThemeToggle />
 
+            <Link className="timeline-button timeline-button--ghost" href="/daily-brief">
+              Daily brief
+            </Link>
+
             {dashboard.projectFilter.options.length > 0 ? (
               <ProjectFilter
                 options={dashboard.projectFilter.options}

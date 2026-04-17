@@ -5,6 +5,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
+import { generateAutomatedDailyBriefsForConnection } from "@/modules/daily-brief/load-daily-brief";
 import {
   resolveJiraRuntimeConfig,
   searchJiraIssuesPage,
@@ -62,6 +63,8 @@ type RunJiraSyncChunkResult = SyncCounts & {
   requestedJql: string;
   issuesFetched: number;
   pageIssuesFetched: number;
+  dailyBriefsGenerated: number;
+  dailyBriefError: string | null;
   summaryFragment: SyncSummaryFragment;
   page: {
     startAt: number;
@@ -1137,6 +1140,8 @@ export async function runJiraSyncChunk({
     });
     const nextStartAt = page.startAt + page.issues.length;
     const hasMore = nextStartAt < page.total && page.issues.length > 0;
+    let dailyBriefsGenerated = 0;
+    let dailyBriefError: string | null = null;
 
     await prisma.syncRun.update({
       where: {
@@ -1153,6 +1158,20 @@ export async function runJiraSyncChunk({
         jiraConnectionId: connection.id,
         signal,
       });
+
+      try {
+        const generatedBriefs = await generateAutomatedDailyBriefsForConnection({
+          jiraConnectionId: connection.id,
+          syncRunId: activeSyncRunId,
+        });
+
+        dailyBriefsGenerated = generatedBriefs.length;
+      } catch (error) {
+        dailyBriefError =
+          error instanceof Error
+            ? error.message
+            : "Failed to generate automatic daily briefs.";
+      }
     }
 
     return {
@@ -1162,6 +1181,8 @@ export async function runJiraSyncChunk({
       requestedJql,
       issuesFetched: nextStartAt,
       pageIssuesFetched: page.issues.length,
+      dailyBriefsGenerated,
+      dailyBriefError,
       projectsSynced: counts.projectsSynced,
       epicsSynced: counts.epicsSynced,
       assigneesSynced: counts.assigneesSynced,
@@ -1198,6 +1219,8 @@ export async function runJiraSync({
   let issuesFetched = 0;
   let issuesSynced = 0;
   let statusTransitionsSynced = 0;
+  let dailyBriefsGenerated = 0;
+  let dailyBriefError: string | null = null;
 
   while (true) {
     const chunk = await runJiraSyncChunk({
@@ -1212,6 +1235,8 @@ export async function runJiraSync({
     issuesFetched = chunk.issuesFetched;
     issuesSynced += chunk.issuesSynced;
     statusTransitionsSynced += chunk.statusTransitionsSynced;
+    dailyBriefsGenerated = chunk.dailyBriefsGenerated;
+    dailyBriefError = chunk.dailyBriefError;
 
     for (const projectKey of chunk.summaryFragment.projectKeys) {
       projectKeys.add(projectKey);
@@ -1237,6 +1262,8 @@ export async function runJiraSync({
         assigneesSynced: assigneeIds.size,
         issuesSynced,
         statusTransitionsSynced,
+        dailyBriefsGenerated,
+        dailyBriefError,
       };
     }
   }
