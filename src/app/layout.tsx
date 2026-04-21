@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+import { getAppLocale } from "@/modules/i18n/server";
+
 export const metadata: Metadata = {
   title: "Anathema",
   description: "Jira timeline analytics grouped by epics.",
@@ -18,13 +20,15 @@ const themeScript = `
 })();
 `;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getAppLocale();
+
   return (
-    <html lang="ru">
+    <html lang={locale}>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>

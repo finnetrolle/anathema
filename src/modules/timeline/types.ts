@@ -1,3 +1,8 @@
+import type {
+  RiskLevel,
+  RiskReasonView,
+} from "@/modules/risk-radar/types";
+
 export type TimelineMarkerKind = "DONE" | "DUE" | "NONE";
 export type TimelinePullRequestStatus =
   | "OPEN"
@@ -34,6 +39,9 @@ export type TimelineIssue = {
   pullRequestCount: number;
   commitCount: number;
   isMissingDueDate: boolean;
+  riskScore: number | null;
+  riskLevel: RiskLevel | null;
+  riskReasons: RiskReasonView[];
 };
 
 export type TimelineEpic = {
@@ -82,6 +90,9 @@ export type TimelineRowItem = {
   pullRequestCount: number;
   commitCount: number;
   isMissingDueDate: boolean;
+  riskScore: number | null;
+  riskLevel: RiskLevel | null;
+  riskReasons: RiskReasonView[];
   startColumn: number;
   span: number;
 };

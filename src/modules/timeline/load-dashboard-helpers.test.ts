@@ -38,21 +38,68 @@ describe("load-dashboard helpers", () => {
           jiraProjectId: "project-1",
         },
         {
-          markerAt: {
-            gte: visibleStart,
-          },
-        },
-        {
           OR: [
             {
-              startedAt: {
-                lte: visibleEnd,
-              },
+              AND: [
+                {
+                  startedAt: {
+                    not: null,
+                  },
+                },
+                {
+                  startedAt: {
+                    lte: visibleEnd,
+                  },
+                },
+                {
+                  markerAt: {
+                    gte: visibleStart,
+                  },
+                },
+              ],
             },
             {
               AND: [
                 {
                   startedAt: null,
+                },
+                {
+                  dueAt: {
+                    not: null,
+                  },
+                },
+                {
+                  dueAt: {
+                    gte: visibleStart,
+                  },
+                },
+              ],
+            },
+            {
+              AND: [
+                {
+                  startedAt: null,
+                },
+                {
+                  dueAt: null,
+                },
+                {
+                  markerKind: "NONE",
+                },
+              ],
+            },
+            {
+              AND: [
+                {
+                  startedAt: null,
+                },
+                {
+                  markerKind: "DONE",
+                },
+                {
+                  markerAt: {
+                    gte: visibleStart,
+                  },
                 },
                 {
                   markerAt: {
@@ -72,16 +119,18 @@ describe("load-dashboard helpers", () => {
       buildIssueDateBounds({
         _min: {
           startedAt: new Date("2026-04-14T09:00:00.000Z"),
+          dueAt: new Date("2026-04-12T09:00:00.000Z"),
           markerAt: new Date("2026-04-13T09:00:00.000Z"),
         },
         _max: {
           startedAt: new Date("2026-04-18T09:00:00.000Z"),
+          dueAt: new Date("2026-04-19T09:00:00.000Z"),
           markerAt: new Date("2026-04-17T09:00:00.000Z"),
         },
       }),
     ).toEqual({
-      minDate: new Date("2026-04-13T09:00:00.000Z"),
-      maxDate: new Date("2026-04-18T09:00:00.000Z"),
+      minDate: new Date("2026-04-12T09:00:00.000Z"),
+      maxDate: new Date("2026-04-19T09:00:00.000Z"),
     });
     expect(
       resolveScopedConnectionIds([

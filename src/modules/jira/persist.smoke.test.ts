@@ -13,6 +13,7 @@ import {
   type JiraRuntimeConfig,
 } from "@/modules/jira/client";
 import { runJiraSync, runJiraSyncChunk } from "@/modules/jira/persist";
+import { loadRiskRadarDashboard } from "@/modules/risk-radar/load-risk-radar";
 import type { JiraIssue, JiraSearchResponse } from "@/modules/jira/types";
 import { loadTimelineDashboard } from "@/modules/timeline/load-dashboard";
 
@@ -295,6 +296,13 @@ describe("real smoke sync gate", () => {
     expect(flattenIssueKeys(scopedDashboard)).toEqual(["CORE-101"]);
     expect(await prisma.dailyBriefRun.count()).toBe(5);
     expect(await prisma.dailyBriefItem.count()).toBeGreaterThan(0);
+    expect(await prisma.riskSnapshot.count()).toBeGreaterThan(0);
+    expect(await prisma.riskReason.count()).toBeGreaterThan(0);
+
+    const riskDashboard = await loadRiskRadarDashboard();
+
+    expect(riskDashboard.emptyStateMessage).toBeNull();
+    expect(riskDashboard.overview.topIssues.map((item) => item.label)).toContain("CORE-101");
   });
 
   it("marks a failed sync run as failed and keeps staged data out of the published dashboard", async () => {

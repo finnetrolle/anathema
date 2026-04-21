@@ -2,7 +2,32 @@
 
 import { useEffect, useState } from "react";
 
+import type { AppLocale } from "@/modules/i18n/config";
+
 type Theme = "light" | "dark";
+
+const THEME_COPY: Record<
+  AppLocale,
+  {
+    switchToDark: string;
+    switchToLight: string;
+    darkMode: string;
+    lightMode: string;
+  }
+> = {
+  ru: {
+    switchToDark: "Переключить на тёмную тему",
+    switchToLight: "Переключить на светлую тему",
+    darkMode: "Тёмная тема",
+    lightMode: "Светлая тема",
+  },
+  en: {
+    switchToDark: "Switch to dark theme",
+    switchToLight: "Switch to light theme",
+    darkMode: "Dark mode",
+    lightMode: "Light mode",
+  },
+};
 
 function getInitialTheme(): Theme {
   if (typeof window === "undefined") return "light";
@@ -13,8 +38,9 @@ function getInitialTheme(): Theme {
     : "light";
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ locale }: { locale: AppLocale }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const copy = THEME_COPY[locale];
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -23,10 +49,10 @@ export function ThemeToggle() {
 
   return (
     <button
-      aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+      aria-label={theme === "light" ? copy.switchToDark : copy.switchToLight}
       className="theme-toggle"
       onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
-      title={theme === "light" ? "Dark mode" : "Light mode"}
+      title={theme === "light" ? copy.darkMode : copy.lightMode}
       type="button"
     >
       {theme === "light" ? (

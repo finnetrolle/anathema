@@ -49,19 +49,49 @@ enum TimelineMarkerKind {
   NONE
 }
 
+enum RiskEntityType {
+  PROJECT
+  EPIC
+  ISSUE
+  ASSIGNEE
+  COMPONENT
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RiskReasonCode {
+  OVERDUE
+  AGING_WIP
+  MISSING_ESTIMATE
+  MISSING_DUE_DATE
+  NO_DEV_ACTIVITY
+  ASSIGNEE_CHURN
+  REOPENED
+  HIGH_RISK_CHILDREN
+  SPREAD_RISK
+  CONCENTRATION_RISK
+}
+
 model JiraConnection {
-  id             String          @id @default(cuid())
-  name           String
-  baseUrl        String          @unique
-  defaultJql     String?
-  timezone       String          @default("Europe/Moscow")
-  workflowRules  Json?
-  projects       JiraProject[]
-  assignees      Assignee[]
-  syncRuns       SyncRun[]
-  dailyBriefRuns DailyBriefRun[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id                  String               @id @default(cuid())
+  name                String
+  baseUrl             String               @unique
+  defaultJql          String?
+  timezone            String               @default("Europe/Moscow")
+  workflowRules       Json?
+  projects            JiraProject[]
+  assignees           Assignee[]
+  syncRuns            SyncRun[]
+  dailyBriefRuns      DailyBriefRun[]
+  riskSnapshots       RiskSnapshot[]
+  riskThresholdConfig RiskThresholdConfig?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 }
 
 model JiraProject {
@@ -73,6 +103,7 @@ model JiraProject {
   connection       JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
   epics            Epic[]
   issues           Issue[]
+  riskSnapshots    RiskSnapshot[]
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
@@ -220,7 +251,7 @@ model Assignee {
 }
 
 model Epic {
-  id            String      @id @default(cuid())
+  id            String         @id @default(cuid())
   jiraProjectId String
   jiraEpicId    String
   key           String
@@ -228,10 +259,11 @@ model Epic {
   status        String
   rank          String?
   jiraUpdatedAt DateTime?
-  project       JiraProject @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
+  project       JiraProject    @relation(fields: [jiraProjectId], references: [id], onDelete: Cascade)
   issues        Issue[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  riskSnapshots RiskSnapshot[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   @@unique([jiraProjectId, jiraEpicId])
   @@unique([jiraProjectId, key])
@@ -260,6 +292,7 @@ model Issue {
   epic          Epic?                @relation(fields: [epicId], references: [id], onDelete: SetNull)
   assignee      Assignee?            @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
   statusHistory IssueStatusHistory[]
+  riskSnapshots RiskSnapshot[]
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
@@ -331,4 +364,53 @@ model DailyBriefItem {
 
   @@index([dailyBriefRunId, itemType, importance])
   @@index([issueKey])
+}
+
+model RiskSnapshot {
+  id               String         @id @default(cuid())
+  jiraConnectionId String
+  jiraProjectId    String?
+  epicId           String?
+  issueId          String?
+  entityType       RiskEntityType
+  entityKey        String
+  riskScore        Int
+  riskLevel        RiskLevel
+  computedAt       DateTime
+  snapshotDate     DateTime
+  connection       JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  project          JiraProject?   @relation(fields: [jiraProjectId], references: [id], onDelete: SetNull)
+  epic             Epic?          @relation(fields: [epicId], references: [id], onDelete: SetNull)
+  issue            Issue?         @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  reasons          RiskReason[]
+  createdAt        DateTime       @default(now())
+
+  @@index([jiraConnectionId, computedAt])
+  @@index([jiraConnectionId, entityType, entityKey, computedAt])
+  @@index([jiraProjectId, entityType, computedAt])
+  @@index([entityType, riskLevel, computedAt])
+}
+
+model RiskReason {
+  id             String         @id @default(cuid())
+  riskSnapshotId String
+  reasonCode     RiskReasonCode
+  weight         Int
+  detailsJson    Json
+  riskSnapshot   RiskSnapshot   @relation(fields: [riskSnapshotId], references: [id], onDelete: Cascade)
+  createdAt      DateTime       @default(now())
+
+  @@index([riskSnapshotId, reasonCode])
+}
+
+model RiskThresholdConfig {
+  jiraConnectionId        String         @id
+  agingDaysWarning        Int            @default(5)
+  agingDaysCritical       Int            @default(10)
+  reassignmentsThreshold  Int            @default(2)
+  staleDevActivityDays    Int            @default(3)
+  epicHighRiskIssueCount  Int            @default(2)
+  connection              JiraConnection @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 }

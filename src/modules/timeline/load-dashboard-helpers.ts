@@ -65,16 +65,26 @@ function pickLaterDate(...values: Array<Date | null | undefined>) {
 export function buildIssueDateBounds(summary: {
   _min: {
     startedAt: Date | null;
+    dueAt: Date | null;
     markerAt: Date | null;
   };
   _max: {
     startedAt: Date | null;
+    dueAt: Date | null;
     markerAt: Date | null;
   };
 }): TimelineDateBounds {
   return {
-    minDate: pickEarlierDate(summary._min.startedAt, summary._min.markerAt),
-    maxDate: pickLaterDate(summary._max.startedAt, summary._max.markerAt),
+    minDate: pickEarlierDate(
+      summary._min.startedAt,
+      summary._min.dueAt,
+      summary._min.markerAt,
+    ),
+    maxDate: pickLaterDate(
+      summary._max.startedAt,
+      summary._max.dueAt,
+      summary._max.markerAt,
+    ),
   };
 }
 
@@ -87,21 +97,68 @@ export function buildVisibleIssueWhere(
     AND: [
       scopeWhere,
       {
-        markerAt: {
-          gte: visibleStart,
-        },
-      },
-      {
         OR: [
           {
-            startedAt: {
-              lte: visibleEnd,
-            },
+            AND: [
+              {
+                startedAt: {
+                  not: null,
+                },
+              },
+              {
+                startedAt: {
+                  lte: visibleEnd,
+                },
+              },
+              {
+                markerAt: {
+                  gte: visibleStart,
+                },
+              },
+            ],
           },
           {
             AND: [
               {
                 startedAt: null,
+              },
+              {
+                dueAt: {
+                  not: null,
+                },
+              },
+              {
+                dueAt: {
+                  gte: visibleStart,
+                },
+              },
+            ],
+          },
+          {
+            AND: [
+              {
+                startedAt: null,
+              },
+              {
+                dueAt: null,
+              },
+              {
+                markerKind: "NONE",
+              },
+            ],
+          },
+          {
+            AND: [
+              {
+                startedAt: null,
+              },
+              {
+                markerKind: "DONE",
+              },
+              {
+                markerAt: {
+                  gte: visibleStart,
+                },
               },
               {
                 markerAt: {

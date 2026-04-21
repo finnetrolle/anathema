@@ -10,6 +10,7 @@ import {
   resolveJiraRuntimeConfig,
   searchJiraIssuesPage,
 } from "@/modules/jira/client";
+import { recomputeRiskSnapshotsForConnection } from "@/modules/risk-radar/load-risk-radar";
 import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
 import {
   deriveAssigneeColor,
@@ -65,6 +66,8 @@ type RunJiraSyncChunkResult = SyncCounts & {
   pageIssuesFetched: number;
   dailyBriefsGenerated: number;
   dailyBriefError: string | null;
+  riskSnapshotsGenerated: number;
+  riskRadarError: string | null;
   summaryFragment: SyncSummaryFragment;
   page: {
     startAt: number;
@@ -1142,6 +1145,8 @@ export async function runJiraSyncChunk({
     const hasMore = nextStartAt < page.total && page.issues.length > 0;
     let dailyBriefsGenerated = 0;
     let dailyBriefError: string | null = null;
+    let riskSnapshotsGenerated = 0;
+    let riskRadarError: string | null = null;
 
     await prisma.syncRun.update({
       where: {
@@ -1172,6 +1177,19 @@ export async function runJiraSyncChunk({
             ? error.message
             : "Failed to generate automatic daily briefs.";
       }
+
+      try {
+        const riskSummary = await recomputeRiskSnapshotsForConnection({
+          jiraConnectionId: connection.id,
+        });
+
+        riskSnapshotsGenerated = riskSummary.totalSnapshots;
+      } catch (error) {
+        riskRadarError =
+          error instanceof Error
+            ? error.message
+            : "Failed to recompute risk radar snapshots.";
+      }
     }
 
     return {
@@ -1183,6 +1201,8 @@ export async function runJiraSyncChunk({
       pageIssuesFetched: page.issues.length,
       dailyBriefsGenerated,
       dailyBriefError,
+      riskSnapshotsGenerated,
+      riskRadarError,
       projectsSynced: counts.projectsSynced,
       epicsSynced: counts.epicsSynced,
       assigneesSynced: counts.assigneesSynced,
@@ -1221,6 +1241,8 @@ export async function runJiraSync({
   let statusTransitionsSynced = 0;
   let dailyBriefsGenerated = 0;
   let dailyBriefError: string | null = null;
+  let riskSnapshotsGenerated = 0;
+  let riskRadarError: string | null = null;
 
   while (true) {
     const chunk = await runJiraSyncChunk({
@@ -1237,6 +1259,8 @@ export async function runJiraSync({
     statusTransitionsSynced += chunk.statusTransitionsSynced;
     dailyBriefsGenerated = chunk.dailyBriefsGenerated;
     dailyBriefError = chunk.dailyBriefError;
+    riskSnapshotsGenerated = chunk.riskSnapshotsGenerated;
+    riskRadarError = chunk.riskRadarError;
 
     for (const projectKey of chunk.summaryFragment.projectKeys) {
       projectKeys.add(projectKey);
@@ -1264,6 +1288,8 @@ export async function runJiraSync({
         statusTransitionsSynced,
         dailyBriefsGenerated,
         dailyBriefError,
+        riskSnapshotsGenerated,
+        riskRadarError,
       };
     }
   }

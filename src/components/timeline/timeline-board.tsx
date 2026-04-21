@@ -9,10 +9,14 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import type { AppLocale } from "@/modules/i18n/config";
+import { getRiskLevelLabel } from "@/modules/risk-radar/presenter";
+import type { RiskLevel } from "@/modules/risk-radar/types";
 import type { TimelineModel, TimelineRowItem } from "@/modules/timeline/types";
 
 type TimelineBoardProps = {
   timeline: TimelineModel;
+  locale: AppLocale;
 };
 
 type SelectedTask = {
@@ -24,7 +28,148 @@ type SelectedTask = {
 
 const POPOVER_MARGIN = 16;
 const POPOVER_GAP = 12;
-const CENTER_POPOVER_BREAKPOINT = 920;
+const CENTER_POPOVER_BREAKPOINT = 1180;
+
+const COPY: Record<
+  AppLocale,
+  {
+    noEstimate: string;
+    mergedPrs: (count: number) => string;
+    openPrs: (count: number) => string;
+    declinedPrs: (count: number) => string;
+    linkedPrs: (count: number) => string;
+    commits: (count: number) => string;
+    noCodeActivity: string;
+    noWorkingDays: string;
+    noTasksForPerson: (person: string) => string;
+    noTasksInRange: string;
+    showAll: string;
+    gridHeader: string;
+    tasksInLane: (count: number) => string;
+    taskDetails: string;
+    openInJira: string;
+    closeTaskDetails: string;
+    close: string;
+    epic: string;
+    assignee: string;
+    status: string;
+    created: string;
+    started: string;
+    dueDate: string;
+    estimate: string;
+    finished: string;
+    assigneeHistory: string;
+    author: string;
+    pullRequests: string;
+    commitsLabel: string;
+    dateNotAvailable: string;
+    startNotObserved: string;
+    noDueDate: string;
+    notCompleted: string;
+    noAssigneesObserved: string;
+    authorNotAvailable: string;
+    riskFactor: string;
+    riskDrivers: string;
+    noRiskFactors: string;
+    riskUnavailable: string;
+    riskCardLabel: (score: number | null, levelLabel: string) => string;
+    attention: string;
+    missingDueDateWarning: string;
+  }
+> = {
+  ru: {
+    noEstimate: "Без оценки",
+    mergedPrs: (count) => `Смерженные PR: ${count}`,
+    openPrs: (count) => `Открытые PR: ${count}`,
+    declinedPrs: (count) => `Отклонённые PR: ${count}`,
+    linkedPrs: (count) => `Связанные PR: ${count}`,
+    commits: (count) => `Коммиты: ${count}`,
+    noCodeActivity: "Нет коммитов или pull request",
+    noWorkingDays: "В выбранном диапазоне нет рабочих дней.",
+    noTasksForPerson: (person) =>
+      `В выбранном диапазоне таймлайна нет задач, связанных с ${person}.`,
+    noTasksInRange: "В выбранный диапазон таймлайна не попадает ни одна задача.",
+    showAll: "Показать всё",
+    gridHeader: "Эпик / Работа",
+    tasksInLane: (count) => `${count} задач в дорожке`,
+    taskDetails: "Детали задачи",
+    openInJira: "Открыть в Jira",
+    closeTaskDetails: "Закрыть детали задачи",
+    close: "Закрыть",
+    epic: "Эпик",
+    assignee: "Исполнитель",
+    status: "Статус",
+    created: "Создано",
+    started: "Старт",
+    dueDate: "Срок",
+    estimate: "Оценка",
+    finished: "Завершено",
+    assigneeHistory: "История исполнителей",
+    author: "Автор",
+    pullRequests: "Pull request",
+    commitsLabel: "Коммиты",
+    dateNotAvailable: "Дата недоступна",
+    startNotObserved: "Старт не зафиксирован",
+    noDueDate: "Срок не указан",
+    notCompleted: "Не завершена",
+    noAssigneesObserved: "Исполнители не зафиксированы",
+    authorNotAvailable: "Автор недоступен",
+    riskFactor: "Риск-фактор",
+    riskDrivers: "Факторы риска",
+    noRiskFactors: "Для задачи не сохранены факторы риска.",
+    riskUnavailable: "Риск не посчитан",
+    riskCardLabel: (score, levelLabel) =>
+      score === null ? "Риск не посчитан" : `Риск-фактор: ${score} (${levelLabel})`,
+    attention: "Внимание",
+    missingDueDateWarning: "Задача в работе, но у неё отсутствует срок.",
+  },
+  en: {
+    noEstimate: "No estimate",
+    mergedPrs: (count) => `Merged PR${count > 1 ? "s" : ""}: ${count}`,
+    openPrs: (count) => `Open PR${count > 1 ? "s" : ""}: ${count}`,
+    declinedPrs: (count) => `Declined PR${count > 1 ? "s" : ""}: ${count}`,
+    linkedPrs: (count) => `Linked PR${count > 1 ? "s" : ""}: ${count}`,
+    commits: (count) => `Commits: ${count}`,
+    noCodeActivity: "No commits or pull requests",
+    noWorkingDays: "Selected range contains no working days.",
+    noTasksForPerson: (person) =>
+      `No tasks related to ${person} in the selected timeline range.`,
+    noTasksInRange: "No tasks intersect the selected timeline range.",
+    showAll: "Show all",
+    gridHeader: "Epic / Work",
+    tasksInLane: (count) => `${count} tasks in lane`,
+    taskDetails: "Task details",
+    openInJira: "Open in Jira",
+    closeTaskDetails: "Close task details",
+    close: "Close",
+    epic: "Epic",
+    assignee: "Assignee",
+    status: "Status",
+    created: "Created",
+    started: "Started",
+    dueDate: "Due date",
+    estimate: "Estimate",
+    finished: "Finished",
+    assigneeHistory: "Assignee history",
+    author: "Author",
+    pullRequests: "Pull requests",
+    commitsLabel: "Commits",
+    dateNotAvailable: "Date not available",
+    startNotObserved: "Start not observed",
+    noDueDate: "No due date",
+    notCompleted: "Not completed",
+    noAssigneesObserved: "No assignees observed",
+    authorNotAvailable: "Author not available",
+    riskFactor: "Risk factor",
+    riskDrivers: "Risk factors",
+    noRiskFactors: "No risk factors were stored for this task.",
+    riskUnavailable: "Risk not computed",
+    riskCardLabel: (score, levelLabel) =>
+      score === null ? "Risk not computed" : `Risk factor: ${score} (${levelLabel})`,
+    attention: "Attention",
+    missingDueDateWarning: "Task is in progress, but due date is missing.",
+  },
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -69,7 +214,7 @@ function formatEstimateValue(value: number, unit: string) {
   return `${formattedValue} ${unit}`;
 }
 
-function formatEstimateLabel(item: TimelineRowItem) {
+function formatEstimateLabel(item: TimelineRowItem, locale: AppLocale) {
   const parts = [
     item.estimateHours === null
       ? null
@@ -79,35 +224,113 @@ function formatEstimateLabel(item: TimelineRowItem) {
       : formatEstimateValue(item.estimateStoryPoints, "SP"),
   ].filter((value): value is string => Boolean(value));
 
-  return parts.length > 0 ? parts.join(" · ") : "No estimate";
+  return parts.length > 0 ? parts.join(" · ") : COPY[locale].noEstimate;
 }
 
-function formatDevelopmentIndicatorLabel(item: TimelineRowItem) {
+function formatDevelopmentIndicatorLabel(item: TimelineRowItem, locale: AppLocale) {
+  const copy = COPY[locale];
+
   if (item.pullRequestCount > 0) {
     if (item.pullRequestStatus === "MERGED") {
-      return `Merged PR${item.pullRequestCount > 1 ? "s" : ""}: ${item.pullRequestCount}`;
+      return copy.mergedPrs(item.pullRequestCount);
     }
 
     if (item.pullRequestStatus === "OPEN") {
-      return `Open PR${item.pullRequestCount > 1 ? "s" : ""}: ${item.pullRequestCount}`;
+      return copy.openPrs(item.pullRequestCount);
     }
 
     if (item.pullRequestStatus === "DECLINED") {
-      return `Declined PR${item.pullRequestCount > 1 ? "s" : ""}: ${item.pullRequestCount}`;
+      return copy.declinedPrs(item.pullRequestCount);
     }
 
-    return `Linked PR${item.pullRequestCount > 1 ? "s" : ""}: ${item.pullRequestCount}`;
+    return copy.linkedPrs(item.pullRequestCount);
   }
 
   if (item.commitCount > 0) {
-    return `Commits: ${item.commitCount}`;
+    return copy.commits(item.commitCount);
   }
 
-  return "No commits or pull requests";
+  return copy.noCodeActivity;
 }
 
-function TaskCardDevelopmentIndicator({ item }: { item: TimelineRowItem }) {
-  const label = formatDevelopmentIndicatorLabel(item);
+function buildRiskLevelClass(level: RiskLevel) {
+  return `risk-level risk-level--${level.toLowerCase()}`;
+}
+
+function formatRiskIndicatorLabel(item: TimelineRowItem, locale: AppLocale) {
+  const copy = COPY[locale];
+  const levelLabel =
+    item.riskLevel === null ? copy.riskUnavailable : getRiskLevelLabel(item.riskLevel, locale);
+
+  return copy.riskCardLabel(item.riskScore, levelLabel);
+}
+
+function TaskCardRiskIndicator({
+  item,
+  locale,
+}: {
+  item: TimelineRowItem;
+  locale: AppLocale;
+}) {
+  const label = formatRiskIndicatorLabel(item, locale);
+
+  return (
+    <span
+      aria-label={label}
+      className={joinClassNames(
+        "task-card__risk-indicator",
+        item.riskLevel
+          ? `task-card__risk-indicator--${item.riskLevel.toLowerCase()}`
+          : "task-card__risk-indicator--empty",
+      )}
+      title={label}
+    >
+      {item.riskScore ?? "—"}
+    </span>
+  );
+}
+
+function TaskRiskReasonCards({
+  item,
+  locale,
+}: {
+  item: TimelineRowItem;
+  locale: AppLocale;
+}) {
+  const copy = COPY[locale];
+
+  return (
+    <div className="risk-reason-block risk-reason-block--embedded">
+      <p className="risk-reason-block__title">{copy.riskDrivers}</p>
+
+      {item.riskReasons.length === 0 ? (
+        <div className="daily-brief-empty">{copy.noRiskFactors}</div>
+      ) : (
+        <div className="risk-reason-list">
+          {item.riskReasons.map((reason) => (
+            <article className="risk-reason-card" key={`${item.issueId}:${reason.reasonCode}`}>
+              <div className="risk-reason-card__header">
+                <strong>{reason.title}</strong>
+                <span>+{reason.weight}</span>
+              </div>
+              <p>{reason.narrative}</p>
+              <div className="risk-reason-card__action">{reason.recommendedAction}</div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskCardDevelopmentIndicator({
+  item,
+  locale,
+}: {
+  item: TimelineRowItem;
+  locale: AppLocale;
+}) {
+  const label = formatDevelopmentIndicatorLabel(item, locale);
 
   if (item.pullRequestCount > 0) {
     return (
@@ -142,7 +365,8 @@ function TaskCardDevelopmentIndicator({ item }: { item: TimelineRowItem }) {
   );
 }
 
-export function TimelineBoard({ timeline }: TimelineBoardProps) {
+export function TimelineBoard({ timeline, locale }: TimelineBoardProps) {
+  const copy = COPY[locale];
   const columnCount = Math.max(1, timeline.columns.length);
   const [activePerson, setActivePerson] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<SelectedTask | null>(null);
@@ -293,15 +517,15 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
     <div className="timeline-board">
       {timeline.columns.length === 0 ? (
         <div className="timeline-board__empty">
-          Selected range contains no working days.
+          {copy.noWorkingDays}
         </div>
       ) : null}
 
       {timeline.columns.length > 0 && visibleRows.length === 0 ? (
         <div className="timeline-board__empty">
           {activePerson
-            ? `No tasks related to ${activePerson} in the selected timeline range.`
-            : "No tasks intersect the selected timeline range."}
+            ? copy.noTasksForPerson(activePerson)
+            : copy.noTasksInRange}
         </div>
       ) : null}
 
@@ -312,7 +536,7 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
             onClick={() => setActivePerson(null)}
             type="button"
           >
-            <span>Show all</span>
+            <span>{copy.showAll}</span>
           </button>
         ) : null}
 
@@ -365,7 +589,7 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
           }
         >
           <div className="timeline-grid__header">
-            <div className="timeline-grid__header-label">Epic / Work</div>
+            <div className="timeline-grid__header-label">{copy.gridHeader}</div>
 
             <div className="timeline-grid__header-track">
               {timeline.columns.map((column) => (
@@ -404,7 +628,7 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
                       {row.epicKey} · {row.epicSummary}
                     </h3>
                     <p className="row-subtitle">
-                      {row.items.length} tasks in lane
+                      {copy.tasksInLane(row.items.length)}
                     </p>
                   </div>
 
@@ -461,7 +685,10 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
                       >
                         <div className="task-card__meta">
                           <span className="task-card__key">{item.issueKey}</span>
-                          <TaskCardDevelopmentIndicator item={item} />
+                          <div className="task-card__signals">
+                            <TaskCardRiskIndicator item={item} locale={locale} />
+                            <TaskCardDevelopmentIndicator item={item} locale={locale} />
+                          </div>
                         </div>
                         <strong className="task-card__title">{item.summary}</strong>
                       </button>
@@ -483,147 +710,165 @@ export function TimelineBoard({ timeline }: TimelineBoardProps) {
               role="dialog"
               style={popoverStyle}
             >
-          <div className="task-dialog__header">
-            <div>
-              <span className="eyebrow">Task details</span>
-              <h3 id="task-dialog-title">{selectedTask.item.issueKey}</h3>
-            </div>
+              <div className="task-dialog__header">
+                <div>
+                  <span className="eyebrow">{copy.taskDetails}</span>
+                  <h3 id="task-dialog-title">{selectedTask.item.issueKey}</h3>
+                </div>
 
-            <div className="task-dialog__actions">
-              {selectedTask.item.issueUrl ? (
-                <a
-                  className="task-dialog__link"
-                  href={selectedTask.item.issueUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  Open in Jira
-                </a>
-              ) : null}
+                <div className="task-dialog__actions">
+                  {selectedTask.item.issueUrl ? (
+                    <a
+                      className="task-dialog__link"
+                      href={selectedTask.item.issueUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      {copy.openInJira}
+                    </a>
+                  ) : null}
 
-              <button
-                aria-label="Close task details"
-                className="task-dialog__close"
-                onClick={() => setSelectedTask(null)}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+                  <button
+                    aria-label={copy.closeTaskDetails}
+                    className="task-dialog__close"
+                    onClick={() => setSelectedTask(null)}
+                    type="button"
+                  >
+                    {copy.close}
+                  </button>
+                </div>
+              </div>
 
               <p className="task-dialog__summary">{selectedTask.item.summary}</p>
 
-              <div className="task-dialog__table-wrap">
-                <table className="task-dialog__table">
-                  <tbody>
-                    <tr>
-                      <th scope="row">Epic</th>
-                      <td>
-                        {selectedTask.epicKey} · {selectedTask.epicSummary}
-                      </td>
-                    </tr>
+              <div className="task-dialog__content">
+                <div className="task-dialog__table-wrap">
+                  <table className="task-dialog__table">
+                    <tbody>
+                      <tr>
+                        <th scope="row">{copy.epic}</th>
+                        <td>
+                          {selectedTask.epicKey} · {selectedTask.epicSummary}
+                        </td>
+                      </tr>
 
-                    <tr>
-                      <th scope="row">Assignee</th>
-                      <td>
-                        <span className="task-dialog__assignee">
-                          <span
-                            className="task-dialog__swatch"
-                            style={
-                              {
-                                backgroundColor: selectedTask.item.assigneeColor,
-                              } as CSSProperties
-                            }
-                          />
-                          {selectedTask.item.assigneeName}
+                      <tr>
+                        <th scope="row">{copy.assignee}</th>
+                        <td>
+                          <span className="task-dialog__assignee">
+                            <span
+                              className="task-dialog__swatch"
+                              style={
+                                {
+                                  backgroundColor: selectedTask.item.assigneeColor,
+                                } as CSSProperties
+                              }
+                            />
+                            {selectedTask.item.assigneeName}
+                          </span>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.status}</th>
+                        <td>{selectedTask.item.statusLabel}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.created}</th>
+                        <td>{selectedTask.item.createdLabel ?? copy.dateNotAvailable}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.started}</th>
+                        <td>{selectedTask.item.startLabel ?? copy.startNotObserved}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.dueDate}</th>
+                        <td>{selectedTask.item.dueLabel ?? copy.noDueDate}</td>
+                      </tr>
+
+                      <tr
+                        className={
+                          !selectedTask.item.isCompleted &&
+                          selectedTask.item.estimateHours === null &&
+                          selectedTask.item.estimateStoryPoints === null
+                            ? "task-dialog__row--alert"
+                            : undefined
+                        }
+                      >
+                        <th scope="row">{copy.estimate}</th>
+                        <td>{formatEstimateLabel(selectedTask.item, locale)}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.finished}</th>
+                        <td>{selectedTask.item.resolvedLabel ?? copy.notCompleted}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.assigneeHistory}</th>
+                        <td>
+                          {selectedTask.item.assigneeHistory.length > 0
+                            ? selectedTask.item.assigneeHistory.join(", ")
+                            : copy.noAssigneesObserved}
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.author}</th>
+                        <td>{selectedTask.item.authorName ?? copy.authorNotAvailable}</td>
+                      </tr>
+
+                      <tr
+                        className={
+                          selectedTask.item.isCompleted &&
+                          selectedTask.item.pullRequestCount === 0
+                            ? "task-dialog__row--alert"
+                            : undefined
+                        }
+                      >
+                        <th scope="row">{copy.pullRequests}</th>
+                        <td>{selectedTask.item.pullRequestCount}</td>
+                      </tr>
+
+                      <tr
+                        className={
+                          !selectedTask.item.isCompleted &&
+                          selectedTask.item.commitCount === 0
+                            ? "task-dialog__row--alert"
+                            : undefined
+                        }
+                      >
+                        <th scope="row">{copy.commitsLabel}</th>
+                        <td>{selectedTask.item.commitCount}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <aside className="task-dialog__risk">
+                  <div className="task-dialog__risk-summary">
+                    <p className="task-dialog__risk-label">{copy.riskFactor}</p>
+                    <div className="task-dialog__risk-score">
+                      {selectedTask.item.riskLevel ? (
+                        <span className={buildRiskLevelClass(selectedTask.item.riskLevel)}>
+                          {getRiskLevelLabel(selectedTask.item.riskLevel, locale)}
                         </span>
-                      </td>
-                    </tr>
+                      ) : null}
+                      <strong>{selectedTask.item.riskScore ?? "—"}</strong>
+                    </div>
+                  </div>
 
-                    <tr>
-                      <th scope="row">Status</th>
-                      <td>{selectedTask.item.statusLabel}</td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Created</th>
-                      <td>{selectedTask.item.createdLabel ?? "Date not available"}</td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Started</th>
-                      <td>{selectedTask.item.startLabel ?? "Start not observed"}</td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Due date</th>
-                      <td>{selectedTask.item.dueLabel ?? "No due date"}</td>
-                    </tr>
-
-                    <tr
-                      className={
-                        !selectedTask.item.isCompleted &&
-                        selectedTask.item.estimateHours === null &&
-                        selectedTask.item.estimateStoryPoints === null
-                          ? "task-dialog__row--alert"
-                          : undefined
-                      }
-                    >
-                      <th scope="row">Estimate</th>
-                      <td>{formatEstimateLabel(selectedTask.item)}</td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Finished</th>
-                      <td>{selectedTask.item.resolvedLabel ?? "Not completed"}</td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Assignee history</th>
-                      <td>
-                        {selectedTask.item.assigneeHistory.length > 0
-                          ? selectedTask.item.assigneeHistory.join(", ")
-                          : "No assignees observed"}
-                      </td>
-                    </tr>
-
-                    <tr>
-                      <th scope="row">Author</th>
-                      <td>{selectedTask.item.authorName ?? "Author not available"}</td>
-                    </tr>
-
-                    <tr
-                      className={
-                        selectedTask.item.isCompleted &&
-                        selectedTask.item.pullRequestCount === 0
-                          ? "task-dialog__row--alert"
-                          : undefined
-                      }
-                    >
-                      <th scope="row">Pull requests</th>
-                      <td>{selectedTask.item.pullRequestCount}</td>
-                    </tr>
-
-                    <tr
-                      className={
-                        !selectedTask.item.isCompleted &&
-                        selectedTask.item.commitCount === 0
-                          ? "task-dialog__row--alert"
-                          : undefined
-                      }
-                    >
-                      <th scope="row">Commits</th>
-                      <td>{selectedTask.item.commitCount}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                  <TaskRiskReasonCards item={selectedTask.item} locale={locale} />
+                </aside>
               </div>
 
               {selectedTask.item.isMissingDueDate ? (
                 <div className="task-dialog__field task-dialog__field--warning">
-                  <span>Attention</span>
-                  <strong>Task is in progress, but due date is missing.</strong>
+                  <span>{copy.attention}</span>
+                  <strong>{copy.missingDueDateWarning}</strong>
                 </div>
               ) : null}
         </div>,

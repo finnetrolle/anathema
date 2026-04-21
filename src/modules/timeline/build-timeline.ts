@@ -7,6 +7,10 @@ import type {
   TimelineRow,
   TimelineRowItem,
 } from "@/modules/timeline/types";
+import {
+  DEFAULT_APP_LOCALE,
+  type AppLocale,
+} from "@/modules/i18n/config";
 import { deriveAssigneeColor } from "@/modules/jira/derive";
 import {
   addDaysToDayKey,
@@ -27,6 +31,7 @@ import {
   normalizeTimelineTimezones,
   parseDateInputInTimezone,
 } from "@/modules/timeline/date-helpers";
+import { resolveTimelineTaskBounds } from "@/modules/timeline/task-bounds";
 
 export const DEFAULT_DAY_WIDTH = 72;
 const MIN_DAY_WIDTH = 48;
@@ -59,7 +64,9 @@ export type TimelineResolvedRange = {
 };
 
 type BuildTimelineOptions = TimelineRangeOptions & {
+  locale?: AppLocale;
   resolvedRange?: TimelineResolvedRange;
+  now?: Date;
 };
 
 function assertDate(value: string | null) {
@@ -237,6 +244,7 @@ function createColumns(
   startDayKey: string,
   endDayKey: string,
   todayDayKeys: string[],
+  locale: AppLocale,
 ): TimelineColumn[] {
   const columns: TimelineColumn[] = [];
   const todayKeySet = new Set(todayDayKeys);
@@ -255,10 +263,12 @@ function createColumns(
     columns.push({
       key: currentDayKey,
       dayKey: currentDayKey,
-      label: formatTimelineDayKey(currentDayKey),
+      label: formatTimelineDayKey(currentDayKey, locale),
       isWeekStart,
       isToday: todayKeySet.has(currentDayKey),
-      weekLabel: isWeekStart ? formatTimelineWeekdayFromDayKey(currentDayKey) : null,
+      weekLabel: isWeekStart
+        ? formatTimelineWeekdayFromDayKey(currentDayKey, locale)
+        : null,
     });
   }
 
@@ -315,31 +325,72 @@ function createMarkerLabel(
   kind: TimelineMarkerKind,
   value: Date | null,
   timezone: string,
+  locale: AppLocale,
 ) {
   if (!value) {
-    return "No due or done date";
+    return locale === "ru" ? "Нет даты срока или завершения" : "No due or done date";
   }
 
   const prefix =
-    kind === "DONE" ? "Done" : kind === "DUE" ? "Due" : "Observed";
+    kind === "DONE"
+      ? locale === "ru"
+        ? "Готово"
+        : "Done"
+      : kind === "DUE"
+        ? locale === "ru"
+          ? "Срок"
+          : "Due"
+        : locale === "ru"
+          ? "Зафиксировано"
+          : "Observed";
 
-  return `${prefix} · ${formatTimelineDate(value, timezone)}`;
+  return `${prefix} · ${formatTimelineDate(value, timezone, locale)}`;
 }
 
 function createDateLabel(
   prefix: string,
   value: Date | null,
   timezone: string,
+  locale: AppLocale,
 ) {
   if (!value) {
     return null;
   }
 
-  return `${prefix} · ${formatTimelineDate(value, timezone)}`;
+  return `${prefix} · ${formatTimelineDate(value, timezone, locale)}`;
 }
 
-function createStartLabel(value: Date | null, timezone: string) {
-  return createDateLabel("Started", value, timezone);
+function createStartLabel(
+  value: Date | null,
+  timezone: string,
+  locale: AppLocale,
+) {
+  return createDateLabel(locale === "ru" ? "Старт" : "Started", value, timezone, locale);
+}
+
+function resolveIssueDates(issue: TimelineIssue, now?: Date) {
+  const markerDate = assertDate(issue.markerAt);
+  const createdDate = assertDate(issue.createdAt);
+  const actualStartDate = assertDate(issue.startAt);
+  const dueDate = assertDate(issue.dueAt);
+  const resolvedDate = assertDate(issue.resolvedAt);
+
+  return {
+    markerDate,
+    createdDate,
+    actualStartDate,
+    dueDate,
+    resolvedDate,
+    bounds: resolveTimelineTaskBounds({
+      timezone: issue.timezone,
+      startAt: actualStartDate,
+      dueAt: dueDate,
+      markerAt: markerDate,
+      markerKind: issue.markerKind,
+      estimateHours: issue.estimateHours,
+      now,
+    }),
+  };
 }
 
 function buildRowItem(
@@ -347,20 +398,13 @@ function buildRowItem(
   visibleStartDayKey: string,
   visibleEndDayKey: string,
   issue: TimelineIssue,
+  locale: AppLocale,
+  now?: Date,
 ): TimelineRowItem | null {
-  const markerDate = assertDate(issue.markerAt);
-  const createdDate = assertDate(issue.createdAt);
-  const actualStartDate = assertDate(issue.startAt);
-  const dueDate = assertDate(issue.dueAt);
-  const resolvedDate = assertDate(issue.resolvedAt);
-  const startDate = actualStartDate ?? markerDate;
-
-  if (!startDate || !markerDate) {
-    return null;
-  }
-
-  const startDayKey = getDayKey(startDate, issue.timezone);
-  const markerDayKey = getDayKey(markerDate, issue.timezone);
+  const { markerDate, createdDate, actualStartDate, dueDate, resolvedDate, bounds } =
+    resolveIssueDates(issue, now);
+  const startDayKey = bounds.startDayKey;
+  const markerDayKey = bounds.endDayKey;
 
   if (
     compareDayKeys(markerDayKey, visibleStartDayKey) < 0 ||
@@ -428,11 +472,26 @@ function buildRowItem(
       statusLabel: issue.status,
       isCompleted: issue.isCompleted,
       markerKind: issue.markerKind,
-      markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone),
-      createdLabel: createDateLabel("Created", createdDate, issue.timezone),
-      startLabel: createStartLabel(actualStartDate, issue.timezone),
-      dueLabel: createDateLabel("Due", dueDate, issue.timezone),
-      resolvedLabel: createDateLabel("Finished", resolvedDate, issue.timezone),
+      markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone, locale),
+      createdLabel: createDateLabel(
+        locale === "ru" ? "Создано" : "Created",
+        createdDate,
+        issue.timezone,
+        locale,
+      ),
+      startLabel: createStartLabel(actualStartDate, issue.timezone, locale),
+      dueLabel: createDateLabel(
+        locale === "ru" ? "Срок" : "Due",
+        dueDate,
+        issue.timezone,
+        locale,
+      ),
+      resolvedLabel: createDateLabel(
+        locale === "ru" ? "Завершено" : "Finished",
+        resolvedDate,
+        issue.timezone,
+        locale,
+      ),
       estimateHours: issue.estimateHours,
       estimateStoryPoints: issue.estimateStoryPoints,
       observedPeople: issue.observedPeople,
@@ -442,6 +501,9 @@ function buildRowItem(
       pullRequestCount: issue.pullRequestCount,
       commitCount: issue.commitCount,
       isMissingDueDate: issue.isMissingDueDate,
+      riskScore: issue.riskScore,
+      riskLevel: issue.riskLevel,
+      riskReasons: issue.riskReasons,
       startColumn: column,
       span: 1,
     };
@@ -466,11 +528,26 @@ function buildRowItem(
     statusLabel: issue.status,
     isCompleted: issue.isCompleted,
     markerKind: issue.markerKind,
-    markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone),
-    createdLabel: createDateLabel("Created", createdDate, issue.timezone),
-    startLabel: createStartLabel(actualStartDate, issue.timezone),
-    dueLabel: createDateLabel("Due", dueDate, issue.timezone),
-    resolvedLabel: createDateLabel("Finished", resolvedDate, issue.timezone),
+    markerLabel: createMarkerLabel(issue.markerKind, markerDate, issue.timezone, locale),
+    createdLabel: createDateLabel(
+      locale === "ru" ? "Создано" : "Created",
+      createdDate,
+      issue.timezone,
+      locale,
+    ),
+    startLabel: createStartLabel(actualStartDate, issue.timezone, locale),
+    dueLabel: createDateLabel(
+      locale === "ru" ? "Срок" : "Due",
+      dueDate,
+      issue.timezone,
+      locale,
+    ),
+    resolvedLabel: createDateLabel(
+      locale === "ru" ? "Завершено" : "Finished",
+      resolvedDate,
+      issue.timezone,
+      locale,
+    ),
     estimateHours: issue.estimateHours,
     estimateStoryPoints: issue.estimateStoryPoints,
     observedPeople: issue.observedPeople,
@@ -480,6 +557,9 @@ function buildRowItem(
     pullRequestCount: issue.pullRequestCount,
     commitCount: issue.commitCount,
     isMissingDueDate: issue.isMissingDueDate,
+    riskScore: issue.riskScore,
+    riskLevel: issue.riskLevel,
+    riskReasons: issue.riskReasons,
     startColumn,
     span,
   };
@@ -490,6 +570,8 @@ function buildRows(
   columns: TimelineColumn[],
   visibleStartDayKey: string,
   visibleEndDayKey: string,
+  locale: AppLocale,
+  now?: Date,
 ): TimelineRow[] {
   const columnIndex = createColumnIndex(columns);
 
@@ -501,7 +583,14 @@ function buildRows(
       epicSummary: epic.summary,
       items: epic.issues
         .map((issue) =>
-          buildRowItem(columnIndex, visibleStartDayKey, visibleEndDayKey, issue),
+          buildRowItem(
+            columnIndex,
+            visibleStartDayKey,
+            visibleEndDayKey,
+            issue,
+            locale,
+            now,
+          ),
         )
         .filter((item): item is TimelineRowItem => item !== null)
         .sort((left, right) => left.startColumn - right.startColumn),
@@ -559,6 +648,7 @@ export function buildTimelineModel(
   epics: TimelineEpic[],
   options: BuildTimelineOptions = {},
 ): TimelineModel {
+  const locale = options.locale ?? DEFAULT_APP_LOCALE;
   const timezones =
     options.resolvedRange?.timezones ?? collectTimelineTimezones(epics, options);
   const resolvedRange =
@@ -572,20 +662,28 @@ export function buildTimelineModel(
       },
       collectDateBounds(
         epics.flatMap((epic) =>
-          epic.issues.flatMap((issue) => [issue.startAt, issue.markerAt].map(assertDate)),
+          epic.issues.flatMap((issue) => {
+            const { bounds } = resolveIssueDates(issue, options.now);
+
+            return [bounds.startDate, bounds.endDate];
+          }),
         ),
       ),
+      options.now,
     );
   const columns = createColumns(
     resolvedRange.selectedStartDayKey,
     resolvedRange.selectedEndDayKey,
     resolvedRange.todayDayKeys,
+    locale,
   );
   const rows = buildRows(
     epics,
     columns,
     resolvedRange.selectedStartDayKey,
     resolvedRange.selectedEndDayKey,
+    locale,
+    options.now,
   );
   const rangeLabelStart = columns[0]?.dayKey ?? resolvedRange.selectedStartDayKey;
   const rangeLabelEnd = columns.at(-1)?.dayKey ?? resolvedRange.selectedEndDayKey;
@@ -595,8 +693,9 @@ export function buildTimelineModel(
     columns,
     rows,
     legend: buildLegend(epics),
-    rangeLabel: `${formatTimelineDayKey(rangeLabelStart)} - ${formatTimelineDayKey(
+    rangeLabel: `${formatTimelineDayKey(rangeLabelStart, locale)} - ${formatTimelineDayKey(
       rangeLabelEnd,
+      locale,
     )}`,
     rangeStartInput: resolvedRange.rangeStartInput,
     rangeEndInput: resolvedRange.rangeEndInput,

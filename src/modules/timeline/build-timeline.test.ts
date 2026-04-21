@@ -36,6 +36,9 @@ function makeIssue(overrides: Partial<TimelineIssue> = {}): TimelineIssue {
     pullRequestCount: 0,
     commitCount: 0,
     isMissingDueDate: false,
+    riskScore: 0,
+    riskLevel: "LOW",
+    riskReasons: [],
     ...overrides,
   };
 }
@@ -127,5 +130,108 @@ describe("buildTimelineModel", () => {
     expect(resolvedRange.selectedEndDayKey).toBe("2026-04-17");
     expect(resolvedRange.dayWidth).toBe(240);
     expect(model.rows).toEqual([]);
+  });
+
+  it("keeps risk metadata on rendered timeline items", () => {
+    const resolvedRange = resolveTimelineRange(
+      {
+        timezone: "Europe/Moscow",
+        rangeStart: "2026-04-10",
+        rangeEnd: "2026-04-14",
+      },
+      null,
+      new Date("2026-04-10T00:00:00.000Z"),
+    );
+    const model = buildTimelineModel(
+      [
+        makeEpic([
+          makeIssue({
+            riskScore: 42,
+            riskLevel: "HIGH",
+            riskReasons: [
+              {
+                reasonCode: "NO_DEV_ACTIVITY",
+                weight: 12,
+                title: "No dev activity",
+                narrative: "There has been no PR or commit activity for 4 day(s).",
+                recommendedAction:
+                  "Check whether real work is happening outside the codebase.",
+                details: {
+                  staleDays: 4,
+                },
+              },
+            ],
+          }),
+        ]),
+      ],
+      { resolvedRange },
+    );
+
+    expect(model.rows[0]?.items[0]?.riskScore).toBe(42);
+    expect(model.rows[0]?.items[0]?.riskLevel).toBe("HIGH");
+    expect(model.rows[0]?.items[0]?.riskReasons).toHaveLength(1);
+    expect(model.rows[0]?.items[0]?.riskReasons[0]?.reasonCode).toBe("NO_DEV_ACTIVITY");
+  });
+
+  it("places not-started tasks from due date and estimate in working days", () => {
+    const resolvedRange = resolveTimelineRange(
+      {
+        timezone: "Europe/Moscow",
+        rangeStart: "2026-03-16",
+        rangeEnd: "2026-03-18",
+      },
+      null,
+      new Date("2026-03-16T00:00:00.000Z"),
+    );
+    const model = buildTimelineModel(
+      [
+        makeEpic([
+          makeIssue({
+            startAt: null,
+            dueAt: "2026-03-18T09:00:00.000Z",
+            markerAt: "2026-03-18T09:00:00.000Z",
+            markerKind: "DUE",
+            estimateHours: 24,
+          }),
+        ]),
+      ],
+      { resolvedRange },
+    );
+
+    expect(model.rows[0]?.items[0]?.startColumn).toBe(1);
+    expect(model.rows[0]?.items[0]?.span).toBe(3);
+  });
+
+  it("anchors not-started tasks without due date on today and extends them by estimate", () => {
+    const now = new Date("2026-04-17T00:00:00.000Z");
+    const resolvedRange = resolveTimelineRange(
+      {
+        timezone: "Europe/Moscow",
+        rangeStart: "2026-04-17",
+        rangeEnd: "2026-04-21",
+      },
+      null,
+      now,
+    );
+    const model = buildTimelineModel(
+      [
+        makeEpic([
+          makeIssue({
+            startAt: null,
+            dueAt: null,
+            markerAt: "2026-04-10T09:00:00.000Z",
+            markerKind: "NONE",
+            estimateHours: 24,
+          }),
+        ]),
+      ],
+      {
+        resolvedRange,
+        now,
+      },
+    );
+
+    expect(model.rows[0]?.items[0]?.startColumn).toBe(1);
+    expect(model.rows[0]?.items[0]?.span).toBe(3);
   });
 });

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
+import { DEFAULT_APP_LOCALE, type AppLocale } from "@/modules/i18n/config";
 import { prisma } from "@/modules/db/prisma";
 import {
   deriveTimelineFields,
@@ -25,6 +26,12 @@ import {
   normalizeTimelineTimezone,
   normalizeTimelineTimezones,
 } from "@/modules/timeline/date-helpers";
+import { describeRiskReason } from "@/modules/risk-radar/reasons";
+import type {
+  RiskLevel,
+  RiskReasonCode,
+  RiskReasonView,
+} from "@/modules/risk-radar/types";
 import type {
   TimelineEpic,
   TimelineMarkerKind,
@@ -110,6 +117,38 @@ type DerivedPersistedTimelineIssue = PersistedTimelineIssue & {
   };
 };
 
+const timelineRiskSnapshotSelect = {
+  issueId: true,
+  riskScore: true,
+  riskLevel: true,
+  reasons: {
+    orderBy: {
+      weight: "desc",
+    },
+    select: {
+      reasonCode: true,
+      weight: true,
+      detailsJson: true,
+    },
+  },
+} satisfies Prisma.RiskSnapshotSelect;
+
+type TimelineRiskSnapshot = Prisma.RiskSnapshotGetPayload<{
+  select: typeof timelineRiskSnapshotSelect;
+}>;
+
+type TimelineIssueRiskSummary = {
+  riskScore: number | null;
+  riskLevel: RiskLevel | null;
+  riskReasons: RiskReasonView[];
+};
+
+const EMPTY_TIMELINE_ISSUE_RISK: TimelineIssueRiskSummary = {
+  riskScore: null,
+  riskLevel: null,
+  riskReasons: [],
+};
+
 const trackedProjectSelect = {
   id: true,
   key: true,
@@ -136,8 +175,6 @@ const timelineScopeProjectSelect = {
     },
   },
 } satisfies Prisma.JiraProjectSelect;
-
-const NO_COMPONENT_LABEL = "No component";
 
 type RawPayloadUser = {
   displayName?: string | null;
@@ -188,6 +225,14 @@ const EMPTY_DEVELOPMENT_SUMMARY: DerivedDevelopmentSummary = {
   commitCount: 0,
 };
 
+function getTimelinePlaceholderCopy(locale: AppLocale) {
+  return {
+    noComponent: locale === "ru" ? "Без компонента" : "No component",
+    unassigned: locale === "ru" ? "Не назначен" : "Unassigned",
+    ungroupedWork: locale === "ru" ? "Работа без эпика" : "Ungrouped work",
+  };
+}
+
 function buildIssueUrl(baseUrl: string | null | undefined, key: string) {
   if (!baseUrl) {
     return null;
@@ -211,11 +256,98 @@ function readRawPayload(rawPayload: Prisma.JsonValue | null) {
   return rawPayload as RawPayloadIssue;
 }
 
-function deriveComponentName(rawPayload: Prisma.JsonValue | null) {
+function toRiskDetailsRecord(details: Prisma.JsonValue | null) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+
+  return details as Record<string, unknown>;
+}
+
+function toTimelineIssueRiskSummary(
+  snapshot: TimelineRiskSnapshot,
+  locale: AppLocale,
+): TimelineIssueRiskSummary {
+  return {
+    riskScore: snapshot.riskScore,
+    riskLevel: snapshot.riskLevel as RiskLevel,
+    riskReasons: snapshot.reasons.map((reason) =>
+      describeRiskReason(
+        locale,
+        reason.reasonCode as RiskReasonCode,
+        reason.weight,
+        toRiskDetailsRecord(reason.detailsJson),
+      ),
+    ),
+  };
+}
+
+async function loadCurrentIssueRiskMap(params: {
+  issueIds: string[];
+  connectionIds: string[];
+  locale: AppLocale;
+}) {
+  const { issueIds, connectionIds, locale } = params;
+
+  if (issueIds.length === 0 || connectionIds.length === 0) {
+    return new Map<string, TimelineIssueRiskSummary>();
+  }
+
+  const latestBatches = await prisma.riskSnapshot.groupBy({
+    by: ["jiraConnectionId"],
+    where: {
+      jiraConnectionId: {
+        in: connectionIds,
+      },
+    },
+    _max: {
+      computedAt: true,
+    },
+  });
+  const currentBatchFilters = latestBatches.flatMap((batch) =>
+    batch._max.computedAt
+      ? [
+          {
+            jiraConnectionId: batch.jiraConnectionId,
+            computedAt: batch._max.computedAt,
+          },
+        ]
+      : [],
+  );
+
+  if (currentBatchFilters.length === 0) {
+    return new Map<string, TimelineIssueRiskSummary>();
+  }
+
+  const snapshots = await prisma.riskSnapshot.findMany({
+    where: {
+      entityType: "ISSUE",
+      issueId: {
+        in: issueIds,
+      },
+      OR: currentBatchFilters,
+    },
+    select: timelineRiskSnapshotSelect,
+  });
+
+  return new Map(
+    snapshots.flatMap((snapshot) =>
+      snapshot.issueId
+        ? [[snapshot.issueId, toTimelineIssueRiskSummary(snapshot, locale)]]
+        : [],
+    ),
+  );
+}
+
+function deriveComponentName(
+  rawPayload: Prisma.JsonValue | null,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+) {
+  const copy = getTimelinePlaceholderCopy(locale);
   const payload = readRawPayload(rawPayload);
 
   if (!payload) {
-    return NO_COMPONENT_LABEL;
+    return copy.noComponent;
   }
 
   const fieldComponents =
@@ -245,10 +377,10 @@ function deriveComponentName(rawPayload: Prisma.JsonValue | null) {
   if (latestComponentValue) {
     const names = splitComponentNames(latestComponentValue);
 
-    return names.length > 0 ? names.join(", ") : NO_COMPONENT_LABEL;
+    return names.length > 0 ? names.join(", ") : copy.noComponent;
   }
 
-  return NO_COMPONENT_LABEL;
+  return copy.noComponent;
 }
 
 function sortChangelogHistories(payload: RawPayloadIssue | null) {
@@ -855,7 +987,9 @@ function deriveEstimateStoryPoints(rawPayload: Prisma.JsonValue | null) {
 function deriveAssigneeHistory(
   rawPayload: Prisma.JsonValue | null,
   currentAssigneeName?: string | null,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
 ) {
+  const copy = getTimelinePlaceholderCopy(locale);
   const payload = readRawPayload(rawPayload);
   const assigneeNames: string[] = [];
   const seenNames = new Set<string>();
@@ -863,7 +997,13 @@ function deriveAssigneeHistory(
   const addAssignee = (value?: string | null) => {
     const normalized = value?.trim();
 
-    if (!normalized || normalized === "Unassigned" || seenNames.has(normalized)) {
+    if (
+      !normalized ||
+      normalized === "Unassigned" ||
+      normalized === "Не назначен" ||
+      normalized === copy.unassigned ||
+      seenNames.has(normalized)
+    ) {
       return;
     }
 
@@ -890,6 +1030,7 @@ function deriveAssigneeHistory(
 function deriveObservedPeople(
   rawPayload: Prisma.JsonValue | null,
   currentAssigneeName?: string | null,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
 ) {
   const payload = readRawPayload(rawPayload);
   const observedPeople: string[] = [];
@@ -906,7 +1047,11 @@ function deriveObservedPeople(
     observedPeople.push(normalized);
   };
 
-  for (const assigneeName of deriveAssigneeHistory(rawPayload, currentAssigneeName)) {
+  for (const assigneeName of deriveAssigneeHistory(
+    rawPayload,
+    currentAssigneeName,
+    locale,
+  )) {
     addPerson(assigneeName);
   }
 
@@ -917,14 +1062,20 @@ function deriveObservedPeople(
   return observedPeople;
 }
 
-function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[] {
+function toTimelineEpics(
+  issues: DerivedPersistedTimelineIssue[],
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+  riskByIssueId = new Map<string, TimelineIssueRiskSummary>(),
+): TimelineEpic[] {
+  const copy = getTimelinePlaceholderCopy(locale);
   const groupedEpics = new Map<string, TimelineEpic>();
 
   for (const issue of issues) {
-    const componentName = deriveComponentName(issue.rawPayload);
-    const assigneeName = issue.assignee?.displayName ?? "Unassigned";
+    const issueRisk = riskByIssueId.get(issue.id) ?? EMPTY_TIMELINE_ISSUE_RISK;
+    const componentName = deriveComponentName(issue.rawPayload, locale);
+    const assigneeName = issue.assignee?.displayName ?? copy.unassigned;
     const authorName = deriveAuthorName(issue.rawPayload);
-    const assigneeHistory = deriveAssigneeHistory(issue.rawPayload, assigneeName);
+    const assigneeHistory = deriveAssigneeHistory(issue.rawPayload, assigneeName, locale);
     const developmentSummary = deriveDevelopmentSummary(issue.rawPayload);
     const epicId = issue.epic?.id ?? "ungrouped";
     const groupKey = `${componentName}::${epicId}`;
@@ -938,7 +1089,7 @@ function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[
       componentName,
       epicId,
       epicKey: issue.epic?.key ?? "NO-EPIC",
-      epicSummary: issue.epic?.summary ?? "Ungrouped work",
+      epicSummary: issue.epic?.summary ?? copy.ungroupedWork,
       assigneeName,
       assigneeColor: issue.assignee?.color ?? "#8ec5ff",
       status: issue.status,
@@ -949,7 +1100,7 @@ function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[
       resolvedAt: issue.resolvedAt?.toISOString() ?? null,
       estimateHours: deriveEstimateHours(issue.rawPayload),
       estimateStoryPoints: deriveEstimateStoryPoints(issue.rawPayload),
-      observedPeople: deriveObservedPeople(issue.rawPayload, assigneeName),
+      observedPeople: deriveObservedPeople(issue.rawPayload, assigneeName, locale),
       assigneeHistory,
       authorName,
       markerAt: issue.derivedTimeline.markerAt?.toISOString() ?? null,
@@ -958,6 +1109,9 @@ function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[
       pullRequestCount: developmentSummary.pullRequestCount,
       commitCount: developmentSummary.commitCount,
       isMissingDueDate: issue.derivedTimeline.isMissingDueDate,
+      riskScore: issueRisk.riskScore,
+      riskLevel: issueRisk.riskLevel,
+      riskReasons: issueRisk.riskReasons,
     } satisfies TimelineEpic["issues"][number];
 
     if (existingEpic) {
@@ -969,7 +1123,7 @@ function toTimelineEpics(issues: DerivedPersistedTimelineIssue[]): TimelineEpic[
       id: groupKey,
       componentName,
       key: issue.epic?.key ?? "NO-EPIC",
-      summary: issue.epic?.summary ?? "Ungrouped work",
+      summary: issue.epic?.summary ?? copy.ungroupedWork,
       issues: [timelineIssue],
     });
   }
@@ -990,6 +1144,7 @@ type LoadTimelineDashboardInput = {
   to?: string;
   dayWidth?: string;
   project?: string;
+  locale?: AppLocale;
 };
 
 function normalizeDateInput(value?: string) {
@@ -1039,6 +1194,7 @@ export async function loadTimelineDashboard({
   to,
   dayWidth,
   project,
+  locale = DEFAULT_APP_LOCALE,
 }: LoadTimelineDashboardInput = {}): Promise<TimelineDashboard> {
   try {
     const trackedProjects = await prisma.jiraProject.findMany({
@@ -1064,10 +1220,12 @@ export async function loadTimelineDashboard({
         },
         _min: {
           startedAt: true,
+          dueAt: true,
           markerAt: true,
         },
         _max: {
           startedAt: true,
+          dueAt: true,
           markerAt: true,
         },
       }),
@@ -1150,9 +1308,15 @@ export async function loadTimelineDashboard({
         derivedTimeline: deriveIssueTimelineState(issue, workflowRules),
       } satisfies DerivedPersistedTimelineIssue;
     });
+    const riskByIssueId = await loadCurrentIssueRiskMap({
+      issueIds: visibleIssues.map((issue) => issue.id),
+      connectionIds: scopedConnectionIds,
+      locale,
+    });
     const timeline =
       totalIssueCount > 0
-        ? buildTimelineModel(toTimelineEpics(visibleIssues), {
+        ? buildTimelineModel(toTimelineEpics(visibleIssues, locale, riskByIssueId), {
+            locale,
             resolvedRange,
           })
         : null;
@@ -1163,9 +1327,11 @@ export async function loadTimelineDashboard({
         ? {
             status: latestSync.status,
             issuesFetched: latestSync.issuesFetched,
-            requestedJql: latestSync.requestedJql ?? "default JQL",
-          }
-        : null,
+          requestedJql:
+            latestSync.requestedJql ??
+            (locale === "ru" ? "JQL по умолчанию" : "default JQL"),
+        }
+      : null,
       errorMessage: null,
       hasAnyIssues: totalIssueCount > 0,
       projectFilter: {
@@ -1182,7 +1348,11 @@ export async function loadTimelineDashboard({
     };
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Unable to load timeline from Prisma.";
+      error instanceof Error
+        ? error.message
+        : locale === "ru"
+          ? "Не удалось загрузить таймлайн из Prisma."
+          : "Unable to load timeline from Prisma.";
 
     return {
       timeline: null,

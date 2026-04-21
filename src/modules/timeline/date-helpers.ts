@@ -1,51 +1,85 @@
 import { DateTime, IANAZone } from "luxon";
 
+import {
+  DEFAULT_APP_LOCALE,
+  getIntlLocale,
+  type AppLocale,
+} from "@/modules/i18n/config";
+
 export const DEFAULT_TIMELINE_TIMEZONE = "Europe/Moscow";
 
 const DATE_INPUT_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
 const WEEKDAY_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
-const DAY_KEY_FORMATTER = new Intl.DateTimeFormat("ru-RU", {
-  day: "2-digit",
-  month: "short",
-  timeZone: "UTC",
-});
-const DAY_KEY_WEEKDAY_FORMATTER = new Intl.DateTimeFormat("ru-RU", {
-  weekday: "short",
-  timeZone: "UTC",
-});
+const DAY_KEY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
+const DAY_KEY_WEEKDAY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
 
-function getDateFormatter(timezone: string) {
+function getDateFormatter(timezone: string, locale: AppLocale) {
   const normalizedTimezone = normalizeTimelineTimezone(timezone);
-  const cachedFormatter = DATE_FORMATTER_CACHE.get(normalizedTimezone);
+  const cacheKey = `${locale}:${normalizedTimezone}`;
+  const cachedFormatter = DATE_FORMATTER_CACHE.get(cacheKey);
 
   if (cachedFormatter) {
     return cachedFormatter;
   }
 
-  const formatter = new Intl.DateTimeFormat("ru-RU", {
+  const formatter = new Intl.DateTimeFormat(getIntlLocale(locale), {
     day: "2-digit",
     month: "short",
     timeZone: normalizedTimezone,
   });
-  DATE_FORMATTER_CACHE.set(normalizedTimezone, formatter);
+  DATE_FORMATTER_CACHE.set(cacheKey, formatter);
 
   return formatter;
 }
 
-function getWeekdayFormatter(timezone: string) {
+function getWeekdayFormatter(timezone: string, locale: AppLocale) {
   const normalizedTimezone = normalizeTimelineTimezone(timezone);
-  const cachedFormatter = WEEKDAY_FORMATTER_CACHE.get(normalizedTimezone);
+  const cacheKey = `${locale}:${normalizedTimezone}`;
+  const cachedFormatter = WEEKDAY_FORMATTER_CACHE.get(cacheKey);
 
   if (cachedFormatter) {
     return cachedFormatter;
   }
 
-  const formatter = new Intl.DateTimeFormat("ru-RU", {
+  const formatter = new Intl.DateTimeFormat(getIntlLocale(locale), {
     weekday: "short",
     timeZone: normalizedTimezone,
   });
-  WEEKDAY_FORMATTER_CACHE.set(normalizedTimezone, formatter);
+  WEEKDAY_FORMATTER_CACHE.set(cacheKey, formatter);
+
+  return formatter;
+}
+
+function getDayKeyFormatter(locale: AppLocale) {
+  const cachedFormatter = DAY_KEY_FORMATTER_CACHE.get(locale);
+
+  if (cachedFormatter) {
+    return cachedFormatter;
+  }
+
+  const formatter = new Intl.DateTimeFormat(getIntlLocale(locale), {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+  DAY_KEY_FORMATTER_CACHE.set(locale, formatter);
+
+  return formatter;
+}
+
+function getDayKeyWeekdayFormatter(locale: AppLocale) {
+  const cachedFormatter = DAY_KEY_WEEKDAY_FORMATTER_CACHE.get(locale);
+
+  if (cachedFormatter) {
+    return cachedFormatter;
+  }
+
+  const formatter = new Intl.DateTimeFormat(getIntlLocale(locale), {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+  DAY_KEY_WEEKDAY_FORMATTER_CACHE.set(locale, formatter);
 
   return formatter;
 }
@@ -102,12 +136,20 @@ export function isValidDayKey(value?: string | null) {
   return Boolean(value && DATE_INPUT_PATTERN.test(value));
 }
 
-export function formatTimelineDate(value: Date, timezone: string) {
-  return getDateFormatter(timezone).format(value);
+export function formatTimelineDate(
+  value: Date,
+  timezone: string,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+) {
+  return getDateFormatter(timezone, locale).format(value);
 }
 
-export function formatTimelineWeekday(value: Date, timezone: string) {
-  return getWeekdayFormatter(timezone).format(value).replace(".", "").toUpperCase();
+export function formatTimelineWeekday(
+  value: Date,
+  timezone: string,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+) {
+  return getWeekdayFormatter(timezone, locale).format(value).replace(".", "").toUpperCase();
 }
 
 export function getDayKey(value: Date, timezone: string) {
@@ -187,17 +229,26 @@ export function compareDayKeys(left: string, right: string) {
   return left.localeCompare(right);
 }
 
-export function formatTimelineDayKey(value: string) {
+export function formatTimelineDayKey(
+  value: string,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+) {
   const parsed = parseDayKey(value);
 
-  return parsed ? DAY_KEY_FORMATTER.format(parsed.toJSDate()) : value;
+  return parsed ? getDayKeyFormatter(locale).format(parsed.toJSDate()) : value;
 }
 
-export function formatTimelineWeekdayFromDayKey(value: string) {
+export function formatTimelineWeekdayFromDayKey(
+  value: string,
+  locale: AppLocale = DEFAULT_APP_LOCALE,
+) {
   const parsed = parseDayKey(value);
 
   return parsed
-    ? DAY_KEY_WEEKDAY_FORMATTER.format(parsed.toJSDate()).replace(".", "").toUpperCase()
+    ? getDayKeyWeekdayFormatter(locale)
+        .format(parsed.toJSDate())
+        .replace(".", "")
+        .toUpperCase()
     : value;
 }
 

@@ -3,7 +3,8 @@ import type {
   JiraIssue,
   JiraSearchResponse,
 } from "@/modules/jira/types";
-import { throwIfAborted } from "@/modules/jira/abort";
+import { readJsonResponse } from "@/modules/http/read-json-response";
+import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
 
 type SearchJiraIssuesInput = {
   jql?: string;
@@ -166,9 +167,46 @@ function createAuthHeader(
   return `Basic ${token}`;
 }
 
+function isAtlassianCloudUrl(baseUrl: string) {
+  return new URL(baseUrl).hostname.endsWith("atlassian.net");
+}
+
+function buildJiraApiUrl(
+  baseUrl: string,
+  path: string,
+  options?: {
+    authMode?: JiraAuthMode;
+    apiVersion?: JiraApiVersion;
+    query?: Record<string, string | number | boolean | undefined>;
+  },
+) {
+  const resolvedPath = options?.apiVersion
+    ? path.replace("{apiVersion}", options.apiVersion)
+    : path;
+  const url = new URL(`${trimTrailingSlash(baseUrl)}${resolvedPath}`);
+
+  if (options?.authMode === "basic" && !isAtlassianCloudUrl(baseUrl)) {
+    url.searchParams.set("os_authType", "basic");
+  }
+
+  for (const [key, value] of Object.entries(options?.query ?? {})) {
+    if (value === undefined) {
+      continue;
+    }
+
+    url.searchParams.set(key, String(value));
+  }
+
+  return url.toString();
+}
+
 async function fetchJson<T>(
   input: string,
   init: RequestInit,
+  options: {
+    context: string;
+    htmlHint?: string;
+  },
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
   throwIfAborted(init.signal ?? undefined);
   const response = await fetch(input, init);
@@ -184,7 +222,7 @@ async function fetchJson<T>(
   return {
     ok: true,
     status: response.status,
-    data: (await response.json()) as T,
+    data: await readJsonResponse<T>(response, options),
   };
 }
 
@@ -193,7 +231,10 @@ async function fetchFieldDefinitions(
   signal?: AbortSignal,
 ) {
   const response = await fetchJson<JiraFieldDefinition[]>(
-    `${runtime.baseUrl}/rest/api/${runtime.apiVersion}/field`,
+    buildJiraApiUrl(runtime.baseUrl, "/rest/api/{apiVersion}/field", {
+      authMode: runtime.authMode,
+      apiVersion: runtime.apiVersion,
+    }),
     {
       method: "GET",
       headers: {
@@ -202,6 +243,11 @@ async function fetchFieldDefinitions(
       },
       cache: "no-store",
       signal,
+    },
+    {
+      context: "Jira field definitions endpoint",
+      htmlHint:
+        "Check JIRA_BASE_URL, authentication settings, and whether Jira redirected to a login page.",
     },
   );
 
@@ -253,6 +299,7 @@ export async function resolveJiraRuntimeConfig(
   const baseUrlCandidates = buildBaseUrlCandidates(credentials.baseUrl);
   const authModes = buildAuthModes(credentials);
   const apiVersions = buildApiVersions(credentials);
+  let lastResolutionError: Error | null = null;
 
   for (const baseUrl of baseUrlCandidates) {
     for (const authMode of authModes) {
@@ -264,18 +311,40 @@ export async function resolveJiraRuntimeConfig(
       );
 
       for (const apiVersion of apiVersions) {
-        const response = await fetchJson<Record<string, unknown>>(
-          `${baseUrl}/rest/api/${apiVersion}/serverInfo`,
-          {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-              Authorization: authHeader,
+        let response: Awaited<
+          ReturnType<typeof fetchJson<Record<string, unknown>>>
+        >;
+
+        try {
+          response = await fetchJson<Record<string, unknown>>(
+            buildJiraApiUrl(baseUrl, "/rest/api/{apiVersion}/serverInfo", {
+              authMode,
+              apiVersion,
+            }),
+            {
+              method: "GET",
+              headers: {
+                Accept: "application/json",
+                Authorization: authHeader,
+              },
+              cache: "no-store",
+              signal,
             },
-            cache: "no-store",
-            signal,
-          },
-        );
+            {
+              context: "Jira server info endpoint",
+              htmlHint:
+                "Check JIRA_BASE_URL, authentication settings, and whether Jira redirected to a login page.",
+            },
+          );
+        } catch (error) {
+          if (isAbortError(error)) {
+            throw error;
+          }
+
+          lastResolutionError =
+            error instanceof Error ? error : new Error(String(error));
+          continue;
+        }
 
         if (!response.ok) {
           continue;
@@ -300,6 +369,10 @@ export async function resolveJiraRuntimeConfig(
         return runtime;
       }
     }
+  }
+
+  if (lastResolutionError) {
+    throw lastResolutionError;
   }
 
   throw new Error(
@@ -371,7 +444,10 @@ export async function searchJiraIssuesPage({
   while (true) {
     throwIfAborted(signal);
     const response = await fetch(
-      `${activeRuntime.baseUrl}/rest/api/${activeRuntime.apiVersion}/search`,
+      buildJiraApiUrl(activeRuntime.baseUrl, "/rest/api/{apiVersion}/search", {
+        authMode: activeRuntime.authMode,
+        apiVersion: activeRuntime.apiVersion,
+      }),
       {
         method: "POST",
         headers: {
@@ -407,7 +483,11 @@ export async function searchJiraIssuesPage({
       throw new Error(`Jira search failed with status ${response.status}.`);
     }
 
-    const payload = (await response.json()) as JiraSearchResponse;
+    const payload = await readJsonResponse<JiraSearchResponse>(response, {
+      context: "Jira search endpoint",
+      htmlHint:
+        "Check JIRA_BASE_URL, authentication settings, and whether Jira redirected to a login page.",
+    });
     return {
       ...payload,
       runtime: activeRuntime,

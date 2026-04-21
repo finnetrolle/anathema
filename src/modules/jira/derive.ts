@@ -293,5 +293,8 @@ export function deriveTimelineTask(
     isMissingDueDate:
       timelineFields.markerKind === "NONE" &&
       isInProgressStatus(issue.fields.status?.name, rules, statusCategoryKey),
+    riskScore: null,
+    riskLevel: null,
+    riskReasons: [],
   };
 }

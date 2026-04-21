@@ -11,6 +11,9 @@ import {
   type FormEvent,
 } from "react";
 
+import type { AppLocale } from "@/modules/i18n/config";
+import { readJsonResponse } from "@/modules/http/read-json-response";
+
 type SyncResponse = {
   ok?: boolean;
   message?: string;
@@ -54,6 +57,83 @@ type SyncProgress = {
 
 type SyncNowButtonProps = {
   initialJql?: string;
+  locale: AppLocale;
+};
+
+const COPY: Record<
+  AppLocale,
+  {
+    open: string;
+    eyebrow: string;
+    title: string;
+    close: string;
+    hint: string;
+    syncing: string;
+    sync: string;
+    inProgressTitle: string;
+    inProgressKnownTotal: (issuesFetched: number, total: number) => string;
+    inProgressUnknownTotal: string;
+    done: string;
+    successTitle: string;
+    defaultJql: string;
+    jiraIssues: string;
+    projects: string;
+    epics: string;
+    assignees: string;
+    issuesSaved: string;
+    statusTransitions: string;
+    errorTitle: string;
+    syncFailed: string;
+  }
+> = {
+  ru: {
+    open: "Синхронизация",
+    eyebrow: "Jira Sync",
+    title: "Синхронизация данных",
+    close: "Закрыть",
+    hint: "Оставьте поле пустым, чтобы использовать JQL по умолчанию.",
+    syncing: "Синхронизация...",
+    sync: "Синхронизировать",
+    inProgressTitle: "Синхронизация выполняется",
+    inProgressKnownTotal: (issuesFetched, total) =>
+      `Загружено ${issuesFetched} из ${total} задач из Jira.`,
+    inProgressUnknownTotal: "Загружаем задачи из Jira и обновляем локальные данные.",
+    done: "Готово",
+    successTitle: "Данные успешно обновлены",
+    defaultJql: "JQL по умолчанию",
+    jiraIssues: "Задач из Jira",
+    projects: "Проектов",
+    epics: "Эпиков",
+    assignees: "Исполнителей",
+    issuesSaved: "Задач сохранено",
+    statusTransitions: "Переходов статусов",
+    errorTitle: "Синхронизация завершилась с ошибкой",
+    syncFailed: "Не удалось выполнить синхронизацию.",
+  },
+  en: {
+    open: "Sync",
+    eyebrow: "Jira Sync",
+    title: "Sync data",
+    close: "Close",
+    hint: "Leave the field empty to use the default JQL.",
+    syncing: "Syncing...",
+    sync: "Run sync",
+    inProgressTitle: "Sync in progress",
+    inProgressKnownTotal: (issuesFetched, total) =>
+      `Loaded ${issuesFetched} of ${total} Jira issues.`,
+    inProgressUnknownTotal: "Loading Jira issues and updating local data.",
+    done: "Done",
+    successTitle: "Data updated successfully",
+    defaultJql: "Default JQL",
+    jiraIssues: "Jira issues",
+    projects: "Projects",
+    epics: "Epics",
+    assignees: "Assignees",
+    issuesSaved: "Issues saved",
+    statusTransitions: "Status transitions",
+    errorTitle: "Sync finished with an error",
+    syncFailed: "Unable to complete the sync.",
+  },
 };
 
 function isAbortError(error: unknown) {
@@ -65,9 +145,11 @@ function isAbortError(error: unknown) {
 
 export function SyncNowButton({
   initialJql = "",
+  locale,
 }: SyncNowButtonProps) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const copy = COPY[locale];
   const [isOpen, setIsOpen] = useState(false);
   const [jql, setJql] = useState(initialJql);
   const [status, setStatus] = useState<"idle" | "syncing" | "success" | "error">(
@@ -179,7 +261,11 @@ export function SyncNowButton({
           }),
           signal: controller.signal,
         });
-        const payload = (await response.json()) as SyncResponse;
+        const payload = await readJsonResponse<SyncResponse>(response, {
+          context: "The sync API",
+          htmlHint:
+            "Check the local server logs for /api/jira/sync and verify that the route returns JSON.",
+        });
 
         if (activeRequestIdRef.current !== requestId) {
           return;
@@ -192,7 +278,7 @@ export function SyncNowButton({
           !payload.summaryFragment
         ) {
           setStatus("error");
-          setMessage(payload.message ?? "Не удалось выполнить синхронизацию.");
+          setMessage(payload.message ?? copy.syncFailed);
           setProgress(null);
           return;
         }
@@ -256,9 +342,7 @@ export function SyncNowButton({
       setStatus("error");
       setProgress(null);
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Не удалось выполнить синхронизацию.",
+        error instanceof Error ? error.message : copy.syncFailed,
       );
     } finally {
       if (activeRequestIdRef.current === requestId) {
@@ -278,7 +362,7 @@ export function SyncNowButton({
         onClick={handleOpen}
         type="button"
       >
-        Синхронизация
+        {copy.open}
       </button>
 
       {isOpen && typeof document !== "undefined"
@@ -293,8 +377,8 @@ export function SyncNowButton({
               >
                 <div className="sync-modal__header">
                   <div>
-                    <span className="eyebrow">Jira Sync</span>
-                    <h3 id={titleId}>Синхронизация данных</h3>
+                    <span className="eyebrow">{copy.eyebrow}</span>
+                    <h3 id={titleId}>{copy.title}</h3>
                   </div>
 
                   <button
@@ -302,7 +386,7 @@ export function SyncNowButton({
                     onClick={handleClose}
                     type="button"
                   >
-                    Закрыть
+                    {copy.close}
                   </button>
                 </div>
 
@@ -321,7 +405,7 @@ export function SyncNowButton({
                   </label>
 
                   <p className="sync-modal__hint">
-                    Оставьте поле пустым, чтобы использовать JQL по умолчанию.
+                    {copy.hint}
                   </p>
 
                   <div className="sync-modal__actions">
@@ -330,7 +414,7 @@ export function SyncNowButton({
                       disabled={isSyncing}
                       type="submit"
                     >
-                      {isSyncing ? "Синхронизация..." : "Синхронизировать"}
+                      {isSyncing ? copy.syncing : copy.sync}
                     </button>
                   </div>
                 </form>
@@ -344,11 +428,14 @@ export function SyncNowButton({
                     <div className="sync-modal__loader">
                       <span aria-hidden="true" className="sync-modal__spinner" />
                       <div>
-                        <strong>Синхронизация выполняется</strong>
+                        <strong>{copy.inProgressTitle}</strong>
                         <p>
                           {progress?.total
-                            ? `Загружено ${progress.issuesFetched} из ${progress.total} задач из Jira.`
-                            : "Загружаем задачи из Jira и обновляем локальные данные."}
+                            ? copy.inProgressKnownTotal(
+                                progress.issuesFetched,
+                                progress.total,
+                              )
+                            : copy.inProgressUnknownTotal}
                         </p>
                       </div>
                     </div>
@@ -360,44 +447,44 @@ export function SyncNowButton({
                     aria-live="polite"
                     className="sync-modal__status-card"
                   >
-                    <span className="eyebrow">Готово</span>
-                    <h4>Данные успешно обновлены</h4>
+                    <span className="eyebrow">{copy.done}</span>
+                    <h4>{copy.successTitle}</h4>
 
                     <dl className="sync-modal__summary-list">
                       <div>
                         <dt>JQL</dt>
                         <dd>
-                          <code>{summary.requestedJql || "JQL по умолчанию"}</code>
+                          <code>{summary.requestedJql || copy.defaultJql}</code>
                         </dd>
                       </div>
 
                       <div>
-                        <dt>Задач из Jira</dt>
+                        <dt>{copy.jiraIssues}</dt>
                         <dd>{summary.issuesFetched}</dd>
                       </div>
 
                       <div>
-                        <dt>Проектов</dt>
+                        <dt>{copy.projects}</dt>
                         <dd>{summary.projectsSynced}</dd>
                       </div>
 
                       <div>
-                        <dt>Эпиков</dt>
+                        <dt>{copy.epics}</dt>
                         <dd>{summary.epicsSynced}</dd>
                       </div>
 
                       <div>
-                        <dt>Исполнителей</dt>
+                        <dt>{copy.assignees}</dt>
                         <dd>{summary.assigneesSynced}</dd>
                       </div>
 
                       <div>
-                        <dt>Задач сохранено</dt>
+                        <dt>{copy.issuesSaved}</dt>
                         <dd>{summary.issuesSynced}</dd>
                       </div>
 
                       <div>
-                        <dt>Переходов статусов</dt>
+                        <dt>{copy.statusTransitions}</dt>
                         <dd>{summary.statusTransitionsSynced}</dd>
                       </div>
                     </dl>
@@ -410,7 +497,7 @@ export function SyncNowButton({
                     className="sync-modal__status-card sync-modal__status-card--error"
                     role="alert"
                   >
-                    <strong>Синхронизация завершилась с ошибкой</strong>
+                    <strong>{copy.errorTitle}</strong>
                     <p>{message}</p>
                   </div>
                 ) : null}
