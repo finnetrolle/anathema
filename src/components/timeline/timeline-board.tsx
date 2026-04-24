@@ -10,8 +10,7 @@ import {
 import { createPortal } from "react-dom";
 
 import type { AppLocale } from "@/modules/i18n/config";
-import { getRiskLevelLabel } from "@/modules/risk-radar/presenter";
-import type { RiskLevel } from "@/modules/risk-radar/types";
+import { getRiskLevelLabel, type RiskLevel } from "@/modules/timeline/risk-helpers";
 import type { TimelineModel, TimelineRowItem } from "@/modules/timeline/types";
 
 type TimelineBoardProps = {
@@ -51,6 +50,8 @@ const COPY: Record<
     closeTaskDetails: string;
     close: string;
     epic: string;
+    component: string;
+    epicComponent: string;
     assignee: string;
     status: string;
     created: string;
@@ -97,6 +98,8 @@ const COPY: Record<
     closeTaskDetails: "Закрыть детали задачи",
     close: "Закрыть",
     epic: "Эпик",
+    component: "Компонент",
+    epicComponent: "Компонент эпика",
     assignee: "Исполнитель",
     status: "Статус",
     created: "Создано",
@@ -143,6 +146,8 @@ const COPY: Record<
     closeTaskDetails: "Close task details",
     close: "Close",
     epic: "Epic",
+    component: "Component",
+    epicComponent: "Epic component",
     assignee: "Assignee",
     status: "Status",
     created: "Created",
@@ -304,7 +309,7 @@ function TaskRiskReasonCards({
       <p className="risk-reason-block__title">{copy.riskDrivers}</p>
 
       {item.riskReasons.length === 0 ? (
-        <div className="daily-brief-empty">{copy.noRiskFactors}</div>
+        <div className="empty-note">{copy.noRiskFactors}</div>
       ) : (
         <div className="risk-reason-list">
           {item.riskReasons.map((reason) => (
@@ -750,6 +755,16 @@ export function TimelineBoard({ timeline, locale }: TimelineBoardProps) {
                         <td>
                           {selectedTask.epicKey} · {selectedTask.epicSummary}
                         </td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.epicComponent}</th>
+                        <td>{selectedTask.item.epicComponentName}</td>
+                      </tr>
+
+                      <tr>
+                        <th scope="row">{copy.component}</th>
+                        <td>{selectedTask.item.componentName}</td>
                       </tr>
 
                       <tr>

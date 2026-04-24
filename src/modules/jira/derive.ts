@@ -5,12 +5,7 @@ import {
   normalizeWorkflowStatusName,
   type JiraWorkflowRules,
 } from "@/modules/jira/workflow-rules";
-import {
-  normalizeTimelineTimezone,
-  parseDateOnlyAtHourInTimezone,
-} from "@/modules/timeline/date-helpers";
 import type {
-  TimelineIssue,
   TimelineMarkerKind,
 } from "@/modules/timeline/types";
 
@@ -32,7 +27,7 @@ function hashAssigneeColor(input: string) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   }
 
-  return ASSIGNEE_COLORS[hash % ASSIGNEE_COLORS.length] ?? FALLBACK_ASSIGNEE_COLOR;
+  return ASSIGNEE_COLORS[hash % ASSIGNEE_COLORS.length];
 }
 
 export function deriveAssigneeIdentity(assignee?: {
@@ -218,83 +213,4 @@ export function deriveTimelineFields(
   };
 }
 
-export function deriveTimelineTask(
-  issue: JiraIssue,
-  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
-  timezone?: string | null,
-): TimelineIssue {
-  const assigneeName = issue.fields.assignee?.displayName ?? "Unassigned";
-  const componentName =
-    issue.fields.components
-      ?.map((component) => component.name?.trim())
-      .filter((name): name is string => Boolean(name))
-      .join(", ") || "No component";
-  const assigneeColor = deriveAssigneeColor(
-    deriveAssigneeIdentity(issue.fields.assignee),
-  );
-  const statusCategoryKey = readStatusCategoryKey(issue.fields.status);
-  const timelineFields = deriveTimelineFields(issue, rules);
-  const observedPeople = Array.from(
-    new Set(
-      [
-        assigneeName,
-        issue.fields.creator?.displayName ?? null,
-        issue.fields.reporter?.displayName ?? null,
-      ].filter((personName): personName is string => Boolean(personName)),
-    ),
-  );
 
-  return {
-    id: issue.id,
-    key: issue.key,
-    summary: issue.fields.summary,
-    issueUrl: null,
-    timezone: normalizeTimelineTimezone(timezone),
-    componentName,
-    epicId: issue.fields.parent?.id ?? "ungrouped",
-    epicKey: issue.fields.parent?.key ?? "NO-EPIC",
-    epicSummary: issue.fields.parent?.fields?.summary ?? "Ungrouped work",
-    assigneeName,
-    assigneeColor,
-    status: issue.fields.status?.name ?? "Unknown",
-    isCompleted: isDoneStatus(
-      issue.fields.status?.name,
-      rules,
-      statusCategoryKey,
-    ),
-    createdAt: issue.fields.created ?? null,
-    startAt: timelineFields.startAt,
-    dueAt: issue.fields.duedate
-      ? parseDateOnlyAtHourInTimezone(
-          issue.fields.duedate,
-          normalizeTimelineTimezone(timezone),
-          12,
-        )?.toISOString() ?? null
-      : null,
-    resolvedAt: issue.fields.resolutiondate ?? null,
-    estimateHours:
-      typeof issue.fields.timeoriginalestimate === "number"
-        ? issue.fields.timeoriginalestimate / 3600
-        : typeof issue.fields.aggregatetimeoriginalestimate === "number"
-          ? issue.fields.aggregatetimeoriginalestimate / 3600
-          : null,
-    estimateStoryPoints: null,
-    observedPeople,
-    assigneeHistory: assigneeName === "Unassigned" ? [] : [assigneeName],
-    authorName:
-      issue.fields.creator?.displayName ??
-      issue.fields.reporter?.displayName ??
-      null,
-    markerAt: timelineFields.markerAt,
-    markerKind: timelineFields.markerKind,
-    pullRequestStatus: "NONE",
-    pullRequestCount: 0,
-    commitCount: 0,
-    isMissingDueDate:
-      timelineFields.markerKind === "NONE" &&
-      isInProgressStatus(issue.fields.status?.name, rules, statusCategoryKey),
-    riskScore: null,
-    riskLevel: null,
-    riskReasons: [],
-  };
-}

@@ -18,7 +18,7 @@ type ResolveWorkflowRulesOptions = {
   connectionName?: string | null;
 };
 
-export type JiraWorkflowRulesConfig = {
+type JiraWorkflowRulesConfig = {
   inProgressStatuses: string[];
   doneStatuses: string[];
 };
@@ -131,7 +131,7 @@ function warnWorkflowRulesFallback(options: ResolveWorkflowRulesOptions) {
   );
 }
 
-export function getDefaultWorkflowRulesConfig(): JiraWorkflowRulesConfig {
+function getDefaultWorkflowRulesConfig(): JiraWorkflowRulesConfig {
   return {
     inProgressStatuses: [...DEFAULT_IN_PROGRESS_STATUSES],
     doneStatuses: [...DEFAULT_DONE_STATUSES],

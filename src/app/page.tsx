@@ -39,8 +39,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const copy =
     locale === "ru"
       ? {
-          dailyBrief: "Ежедневный бриф",
-          riskRadar: "Радар рисков",
+          issues: "Задачи",
           settings: "Настройки",
           startDate: "Дата начала",
           endDate: "Дата конца",
@@ -54,8 +53,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           manualSyncEndpoint: "Ручной endpoint для синхронизации:",
         }
       : {
-          dailyBrief: "Daily brief",
-          riskRadar: "Risk radar",
+          issues: "Issues",
           settings: "Settings",
           startDate: "Start date",
           endDate: "End date",
@@ -81,12 +79,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <LanguageToggle locale={locale} />
             <ThemeToggle locale={locale} />
 
-            <Link className="timeline-button timeline-button--ghost" href="/daily-brief">
-              {copy.dailyBrief}
-            </Link>
-
-            <Link className="timeline-button timeline-button--ghost" href="/risk-radar">
-              {copy.riskRadar}
+            <Link className="timeline-button timeline-button--ghost" href="/issues">
+              {copy.issues}
             </Link>
 
             {dashboard.projectFilter.options.length > 0 ? (

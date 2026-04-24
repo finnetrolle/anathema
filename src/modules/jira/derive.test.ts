@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   deriveMarker,
   deriveStartedAt,
-  deriveTimelineTask,
 } from "@/modules/jira/derive";
 import type { JiraIssue } from "@/modules/jira/types";
 
@@ -173,40 +172,4 @@ describe("deriveMarker", () => {
   });
 });
 
-describe("deriveTimelineTask", () => {
-  it("keeps due dates on the connection day and flags in-progress work without due dates", () => {
-    const dueIssue = makeIssue({
-      fields: {
-        status: {
-          name: "In Progress",
-          statusCategory: {
-            key: "indeterminate",
-          },
-        },
-        duedate: "2026-04-16",
-      },
-    });
-    const missingDueDateIssue = makeIssue({
-      key: "AN-2",
-      fields: {
-        status: {
-          name: "In Progress",
-          statusCategory: {
-            key: "indeterminate",
-          },
-        },
-        assignee: null,
-        duedate: null,
-        updated: "2026-04-17T08:00:00.000Z",
-      },
-    });
 
-    expect(
-      deriveTimelineTask(dueIssue, undefined, "Pacific/Kiritimati").dueAt,
-    ).toBe("2026-04-15T22:00:00.000Z");
-    expect(
-      deriveTimelineTask(missingDueDateIssue, undefined, "Europe/Moscow")
-        .isMissingDueDate,
-    ).toBe(true);
-  });
-});

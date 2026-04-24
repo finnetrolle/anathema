@@ -5,12 +5,10 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
-import { generateAutomatedDailyBriefsForConnection } from "@/modules/daily-brief/load-daily-brief";
 import {
   resolveJiraRuntimeConfig,
   searchJiraIssuesPage,
 } from "@/modules/jira/client";
-import { recomputeRiskSnapshotsForConnection } from "@/modules/risk-radar/load-risk-radar";
 import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
 import {
   deriveAssigneeColor,
@@ -64,10 +62,6 @@ type RunJiraSyncChunkResult = SyncCounts & {
   requestedJql: string;
   issuesFetched: number;
   pageIssuesFetched: number;
-  dailyBriefsGenerated: number;
-  dailyBriefError: string | null;
-  riskSnapshotsGenerated: number;
-  riskRadarError: string | null;
   summaryFragment: SyncSummaryFragment;
   page: {
     startAt: number;
@@ -1143,11 +1137,6 @@ export async function runJiraSyncChunk({
     });
     const nextStartAt = page.startAt + page.issues.length;
     const hasMore = nextStartAt < page.total && page.issues.length > 0;
-    let dailyBriefsGenerated = 0;
-    let dailyBriefError: string | null = null;
-    let riskSnapshotsGenerated = 0;
-    let riskRadarError: string | null = null;
-
     await prisma.syncRun.update({
       where: {
         id: activeSyncRunId,
@@ -1163,33 +1152,6 @@ export async function runJiraSyncChunk({
         jiraConnectionId: connection.id,
         signal,
       });
-
-      try {
-        const generatedBriefs = await generateAutomatedDailyBriefsForConnection({
-          jiraConnectionId: connection.id,
-          syncRunId: activeSyncRunId,
-        });
-
-        dailyBriefsGenerated = generatedBriefs.length;
-      } catch (error) {
-        dailyBriefError =
-          error instanceof Error
-            ? error.message
-            : "Failed to generate automatic daily briefs.";
-      }
-
-      try {
-        const riskSummary = await recomputeRiskSnapshotsForConnection({
-          jiraConnectionId: connection.id,
-        });
-
-        riskSnapshotsGenerated = riskSummary.totalSnapshots;
-      } catch (error) {
-        riskRadarError =
-          error instanceof Error
-            ? error.message
-            : "Failed to recompute risk radar snapshots.";
-      }
     }
 
     return {
@@ -1199,10 +1161,6 @@ export async function runJiraSyncChunk({
       requestedJql,
       issuesFetched: nextStartAt,
       pageIssuesFetched: page.issues.length,
-      dailyBriefsGenerated,
-      dailyBriefError,
-      riskSnapshotsGenerated,
-      riskRadarError,
       projectsSynced: counts.projectsSynced,
       epicsSynced: counts.epicsSynced,
       assigneesSynced: counts.assigneesSynced,
@@ -1239,11 +1197,6 @@ export async function runJiraSync({
   let issuesFetched = 0;
   let issuesSynced = 0;
   let statusTransitionsSynced = 0;
-  let dailyBriefsGenerated = 0;
-  let dailyBriefError: string | null = null;
-  let riskSnapshotsGenerated = 0;
-  let riskRadarError: string | null = null;
-
   while (true) {
     const chunk = await runJiraSyncChunk({
       jql,
@@ -1257,10 +1210,6 @@ export async function runJiraSync({
     issuesFetched = chunk.issuesFetched;
     issuesSynced += chunk.issuesSynced;
     statusTransitionsSynced += chunk.statusTransitionsSynced;
-    dailyBriefsGenerated = chunk.dailyBriefsGenerated;
-    dailyBriefError = chunk.dailyBriefError;
-    riskSnapshotsGenerated = chunk.riskSnapshotsGenerated;
-    riskRadarError = chunk.riskRadarError;
 
     for (const projectKey of chunk.summaryFragment.projectKeys) {
       projectKeys.add(projectKey);
@@ -1286,10 +1235,6 @@ export async function runJiraSync({
         assigneesSynced: assigneeIds.size,
         issuesSynced,
         statusTransitionsSynced,
-        dailyBriefsGenerated,
-        dailyBriefError,
-        riskSnapshotsGenerated,
-        riskRadarError,
       };
     }
   }

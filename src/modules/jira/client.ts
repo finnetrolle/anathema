@@ -1,19 +1,15 @@
 import type {
   JiraFieldDefinition,
-  JiraIssue,
   JiraSearchResponse,
 } from "@/modules/jira/types";
 import { readJsonResponse } from "@/modules/http/read-json-response";
 import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
 
-type SearchJiraIssuesInput = {
+type SearchJiraIssuesPageInput = {
   jql?: string;
   maxResults?: number;
   runtime?: JiraRuntimeConfig;
   signal?: AbortSignal;
-};
-
-type SearchJiraIssuesPageInput = SearchJiraIssuesInput & {
   startAt?: number;
   minResults?: number;
 };
@@ -113,9 +109,6 @@ function buildBaseUrlCandidates(baseUrl: string) {
     candidates.add(`${parsed.origin}/jira`);
   }
 
-  if (parsed.pathname.includes("/stash") || parsed.pathname.includes("/bitbucket")) {
-    candidates.add(`${parsed.origin}/jira`);
-  }
 
   return [...candidates];
 }
@@ -380,44 +373,6 @@ export async function resolveJiraRuntimeConfig(
   );
 }
 
-export async function searchJiraIssues({
-  jql,
-  maxResults = 100,
-  runtime,
-  signal,
-}: SearchJiraIssuesInput): Promise<{
-  issues: JiraIssue[];
-  runtime: JiraRuntimeConfig;
-}> {
-  const activeRuntime = runtime ?? (await resolveJiraRuntimeConfig(signal));
-  const issues: JiraIssue[] = [];
-  let startAt = 0;
-
-  while (true) {
-    const page = await searchJiraIssuesPage({
-      jql,
-      startAt,
-      maxResults,
-      runtime: activeRuntime,
-      signal,
-    });
-
-    issues.push(...page.issues);
-
-    const fetchedCount = page.startAt + page.issues.length;
-
-    if (fetchedCount >= page.total || page.issues.length === 0) {
-      break;
-    }
-
-    startAt = fetchedCount;
-  }
-
-  return {
-    issues,
-    runtime: activeRuntime,
-  };
-}
 
 export async function searchJiraIssuesPage({
   jql,

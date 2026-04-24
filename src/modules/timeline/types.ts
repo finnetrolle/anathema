@@ -1,7 +1,7 @@
 import type {
   RiskLevel,
   RiskReasonView,
-} from "@/modules/risk-radar/types";
+} from "@/modules/timeline/risk-helpers";
 
 export type TimelineMarkerKind = "DONE" | "DUE" | "NONE";
 export type TimelinePullRequestStatus =
@@ -71,6 +71,7 @@ export type TimelineRowItem = {
   issueKey: string;
   summary: string;
   issueUrl: string | null;
+  componentName: string;
   assigneeName: string;
   assigneeColor: string;
   statusLabel: string;
@@ -89,6 +90,7 @@ export type TimelineRowItem = {
   pullRequestStatus: TimelinePullRequestStatus;
   pullRequestCount: number;
   commitCount: number;
+  epicComponentName: string;
   isMissingDueDate: boolean;
   riskScore: number | null;
   riskLevel: RiskLevel | null;

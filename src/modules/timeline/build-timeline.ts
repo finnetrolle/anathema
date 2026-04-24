@@ -33,10 +33,10 @@ import {
 } from "@/modules/timeline/date-helpers";
 import { resolveTimelineTaskBounds } from "@/modules/timeline/task-bounds";
 
-export const DEFAULT_DAY_WIDTH = 72;
+const DEFAULT_DAY_WIDTH = 120;
 const MIN_DAY_WIDTH = 48;
 const MAX_DAY_WIDTH = 240;
-const DEFAULT_RANGE_SPAN_IN_DAYS = 15;
+const DEFAULT_RANGE_SPAN_IN_DAYS = 12;
 
 type TimelineRangeOptions = {
   timezone?: string | null;
@@ -398,6 +398,7 @@ function buildRowItem(
   visibleStartDayKey: string,
   visibleEndDayKey: string,
   issue: TimelineIssue,
+  epicComponentName: string,
   locale: AppLocale,
   now?: Date,
 ): TimelineRowItem | null {
@@ -467,6 +468,7 @@ function buildRowItem(
       issueKey: issue.key,
       summary: issue.summary,
       issueUrl: issue.issueUrl,
+      componentName: issue.componentName,
       assigneeName: issue.assigneeName,
       assigneeColor: issue.assigneeColor,
       statusLabel: issue.status,
@@ -500,6 +502,7 @@ function buildRowItem(
       pullRequestStatus: issue.pullRequestStatus,
       pullRequestCount: issue.pullRequestCount,
       commitCount: issue.commitCount,
+      epicComponentName,
       isMissingDueDate: issue.isMissingDueDate,
       riskScore: issue.riskScore,
       riskLevel: issue.riskLevel,
@@ -523,6 +526,7 @@ function buildRowItem(
     issueKey: issue.key,
     summary: issue.summary,
     issueUrl: issue.issueUrl,
+    componentName: issue.componentName,
     assigneeName: issue.assigneeName,
     assigneeColor: issue.assigneeColor,
     statusLabel: issue.status,
@@ -556,6 +560,7 @@ function buildRowItem(
     pullRequestStatus: issue.pullRequestStatus,
     pullRequestCount: issue.pullRequestCount,
     commitCount: issue.commitCount,
+    epicComponentName,
     isMissingDueDate: issue.isMissingDueDate,
     riskScore: issue.riskScore,
     riskLevel: issue.riskLevel,
@@ -588,6 +593,7 @@ function buildRows(
             visibleStartDayKey,
             visibleEndDayKey,
             issue,
+            epic.componentName,
             locale,
             now,
           ),

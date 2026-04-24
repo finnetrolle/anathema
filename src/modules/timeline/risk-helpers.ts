@@ -3,7 +3,36 @@ import {
   type AppLocale,
 } from "@/modules/i18n/config";
 
-import type { RiskReasonCode, RiskReasonView } from "./types";
+// ── Risk types (inlined from deleted risk-radar module) ──
+
+export const RISK_LEVELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type RiskLevel = (typeof RISK_LEVELS)[number];
+
+export const RISK_REASON_CODES = [
+  "OVERDUE",
+  "AGING_WIP",
+  "MISSING_ESTIMATE",
+  "MISSING_DUE_DATE",
+  "NO_DEV_ACTIVITY",
+  "ASSIGNEE_CHURN",
+  "REOPENED",
+  "HIGH_RISK_CHILDREN",
+  "SPREAD_RISK",
+  "CONCENTRATION_RISK",
+] as const;
+
+export type RiskReasonCode = (typeof RISK_REASON_CODES)[number];
+
+export type RiskReasonView = {
+  reasonCode: RiskReasonCode;
+  weight: number;
+  title: string;
+  narrative: string;
+  recommendedAction: string;
+  details: Record<string, unknown>;
+};
+
+// ── Risk helpers ──
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -256,4 +285,20 @@ export function describeRiskReason(
       };
     }
   }
+}
+
+export function getRiskLevelLabel(level: RiskLevel, locale: AppLocale) {
+  if (level === "CRITICAL") {
+    return locale === "ru" ? "Критический" : "Critical";
+  }
+
+  if (level === "HIGH") {
+    return locale === "ru" ? "Высокий" : "High";
+  }
+
+  if (level === "MEDIUM") {
+    return locale === "ru" ? "Средний" : "Medium";
+  }
+
+  return locale === "ru" ? "Низкий" : "Low";
 }

@@ -26,12 +26,12 @@ import {
   normalizeTimelineTimezone,
   normalizeTimelineTimezones,
 } from "@/modules/timeline/date-helpers";
-import { describeRiskReason } from "@/modules/risk-radar/reasons";
-import type {
-  RiskLevel,
-  RiskReasonCode,
-  RiskReasonView,
-} from "@/modules/risk-radar/types";
+import {
+  describeRiskReason,
+  type RiskLevel,
+  type RiskReasonCode,
+  type RiskReasonView,
+} from "@/modules/timeline/risk-helpers";
 import type {
   TimelineEpic,
   TimelineMarkerKind,
@@ -1068,11 +1068,24 @@ function toTimelineEpics(
   riskByIssueId = new Map<string, TimelineIssueRiskSummary>(),
 ): TimelineEpic[] {
   const copy = getTimelinePlaceholderCopy(locale);
+
+  const epicComponentMap = new Map<string, string>();
+  for (const issue of issues) {
+    if (!issue.epic?.id) continue;
+    const name = deriveComponentName(issue.rawPayload, locale);
+    if (name !== copy.noComponent && !epicComponentMap.has(issue.epic.id)) {
+      epicComponentMap.set(issue.epic.id, name);
+    }
+  }
+
   const groupedEpics = new Map<string, TimelineEpic>();
 
   for (const issue of issues) {
     const issueRisk = riskByIssueId.get(issue.id) ?? EMPTY_TIMELINE_ISSUE_RISK;
-    const componentName = deriveComponentName(issue.rawPayload, locale);
+    let componentName = deriveComponentName(issue.rawPayload, locale);
+    if (componentName === copy.noComponent && issue.epic?.id) {
+      componentName = epicComponentMap.get(issue.epic.id) ?? componentName;
+    }
     const assigneeName = issue.assignee?.displayName ?? copy.unassigned;
     const authorName = deriveAuthorName(issue.rawPayload);
     const assigneeHistory = deriveAssigneeHistory(issue.rawPayload, assigneeName, locale);

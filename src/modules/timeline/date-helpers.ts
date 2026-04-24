@@ -10,7 +10,6 @@ export const DEFAULT_TIMELINE_TIMEZONE = "Europe/Moscow";
 
 const DATE_INPUT_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
-const WEEKDAY_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
 const DAY_KEY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
 const DAY_KEY_WEEKDAY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
 
@@ -29,24 +28,6 @@ function getDateFormatter(timezone: string, locale: AppLocale) {
     timeZone: normalizedTimezone,
   });
   DATE_FORMATTER_CACHE.set(cacheKey, formatter);
-
-  return formatter;
-}
-
-function getWeekdayFormatter(timezone: string, locale: AppLocale) {
-  const normalizedTimezone = normalizeTimelineTimezone(timezone);
-  const cacheKey = `${locale}:${normalizedTimezone}`;
-  const cachedFormatter = WEEKDAY_FORMATTER_CACHE.get(cacheKey);
-
-  if (cachedFormatter) {
-    return cachedFormatter;
-  }
-
-  const formatter = new Intl.DateTimeFormat(getIntlLocale(locale), {
-    weekday: "short",
-    timeZone: normalizedTimezone,
-  });
-  WEEKDAY_FORMATTER_CACHE.set(cacheKey, formatter);
 
   return formatter;
 }
@@ -144,24 +125,12 @@ export function formatTimelineDate(
   return getDateFormatter(timezone, locale).format(value);
 }
 
-export function formatTimelineWeekday(
-  value: Date,
-  timezone: string,
-  locale: AppLocale = DEFAULT_APP_LOCALE,
-) {
-  return getWeekdayFormatter(timezone, locale).format(value).replace(".", "").toUpperCase();
-}
-
 export function getDayKey(value: Date, timezone: string) {
   return toZonedDateTime(value, timezone).toFormat("yyyy-MM-dd");
 }
 
 export function getTodayDayKey(timezone: string, now = new Date()) {
   return getDayKey(now, timezone);
-}
-
-export function getStartOfDay(value: Date, timezone: string) {
-  return toZonedDateTime(value, timezone).startOf("day").toUTC().toJSDate();
 }
 
 export function getEndOfDay(value: Date, timezone: string) {
@@ -201,28 +170,6 @@ export function parseDateOnlyAtHourInTimezone(
   return parsed
     ? parsed.set({ hour, minute: 0, second: 0, millisecond: 0 }).toUTC().toJSDate()
     : null;
-}
-
-export function addDaysInTimezone(value: Date, amount: number, timezone: string) {
-  return toZonedDateTime(value, timezone)
-    .startOf("day")
-    .plus({ days: amount })
-    .toUTC()
-    .toJSDate();
-}
-
-export function isWeekendInTimezone(value: Date, timezone: string) {
-  const weekday = toZonedDateTime(value, timezone).weekday;
-
-  return weekday === 6 || weekday === 7;
-}
-
-export function isWeekStartInTimezone(value: Date, timezone: string) {
-  return toZonedDateTime(value, timezone).weekday === 1;
-}
-
-export function toDateInputValue(value: Date, timezone: string) {
-  return getDayKey(value, timezone);
 }
 
 export function compareDayKeys(left: string, right: string) {
@@ -294,9 +241,3 @@ export function getLaterDayKey(...values: Array<string | null | undefined>) {
     .at(-1) ?? null;
 }
 
-export function getCalendarDayDistance(left: Date, right: Date, timezone: string) {
-  const leftDate = toZonedDateTime(left, timezone).startOf("day");
-  const rightDate = toZonedDateTime(right, timezone).startOf("day");
-
-  return Math.abs(Math.round(rightDate.diff(leftDate, "days").days));
-}
