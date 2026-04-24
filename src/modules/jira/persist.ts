@@ -86,17 +86,6 @@ type EpicSeed = {
   jiraUpdatedAt: Date | null;
 };
 
-type PersistedEpicRecord = {
-  id: string;
-  syncRunId: string;
-  stagedProjectId: string;
-  jiraEpicId: string;
-  key: string;
-  summary: string;
-  status: string;
-  jiraUpdatedAt: Date | null;
-};
-
 function readEpicLinkKey(issue: JiraIssue, epicLinkFieldId?: string) {
   if (!epicLinkFieldId) {
     return null;
@@ -136,10 +125,6 @@ function parseJiraDate(value?: string | null, timezone?: string | null) {
 
 function toPrismaJson(value: unknown) {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-}
-
-function toNullablePrismaJson(value: Prisma.JsonValue | null) {
-  return value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
 }
 
 function buildRawPayload(
@@ -250,10 +235,6 @@ function buildLinkedEpicSeed(params: {
   };
 }
 
-function buildEpicCacheKey(jiraProjectId: string, identifier: string) {
-  return `${jiraProjectId}:${identifier}`;
-}
-
 function isPlaceholderEpicId(jiraEpicId: string, key: string) {
   return jiraEpicId === key;
 }
@@ -264,158 +245,58 @@ function isPlaceholderEpicSummary(summary: string, key: string) {
   return normalizedSummary.length === 0 || normalizedSummary === key;
 }
 
-function mergeEpicValues(
-  existingEpic: PersistedEpicRecord,
-  epicSeed: EpicSeed,
-) {
+function mergeEpicSeeds(existing: EpicSeed, incoming: EpicSeed): EpicSeed {
   const existingIdIsPlaceholder = isPlaceholderEpicId(
-    existingEpic.jiraEpicId,
-    existingEpic.key,
+    existing.jiraEpicId,
+    existing.key,
   );
   const incomingIdIsPlaceholder = isPlaceholderEpicId(
-    epicSeed.jiraEpicId,
-    epicSeed.key,
+    incoming.jiraEpicId,
+    incoming.key,
   );
 
   return {
     jiraEpicId:
       existingIdIsPlaceholder && !incomingIdIsPlaceholder
-        ? epicSeed.jiraEpicId
-        : existingEpic.jiraEpicId,
-    key: epicSeed.key,
-    summary: isPlaceholderEpicSummary(epicSeed.summary, epicSeed.key)
-      ? existingEpic.summary
-      : epicSeed.summary,
-    status: epicSeed.status === "Unknown" ? existingEpic.status : epicSeed.status,
-    jiraUpdatedAt: epicSeed.jiraUpdatedAt ?? existingEpic.jiraUpdatedAt,
+        ? incoming.jiraEpicId
+        : existing.jiraEpicId,
+    key: incoming.key,
+    summary: isPlaceholderEpicSummary(incoming.summary, incoming.key)
+      ? existing.summary
+      : incoming.summary,
+    status: incoming.status === "Unknown" ? existing.status : incoming.status,
+    jiraUpdatedAt: incoming.jiraUpdatedAt ?? existing.jiraUpdatedAt,
   };
 }
 
-async function upsertStagedEpic(params: {
-  syncRunId: string;
-  stagedProjectId: string;
-  epicSeed: EpicSeed;
-  epicCache: Map<string, PersistedEpicRecord>;
-  signal?: AbortSignal;
-}) {
-  const cacheKeyById = buildEpicCacheKey(
-    params.stagedProjectId,
-    params.epicSeed.jiraEpicId,
-  );
-  const cacheKeyByKey = buildEpicCacheKey(
-    params.stagedProjectId,
-    params.epicSeed.key,
-  );
-
-  const cachedEpic =
-    params.epicCache.get(cacheKeyById) ?? params.epicCache.get(cacheKeyByKey);
-  const existingEpic =
-    cachedEpic ??
-    (await runWithAbortCheck(
-      () =>
-        prisma.stagedEpic.findFirst({
-          where: {
-            syncRunId: params.syncRunId,
-            stagedProjectId: params.stagedProjectId,
-            OR: [
-              {
-                jiraEpicId: params.epicSeed.jiraEpicId,
-              },
-              {
-                key: params.epicSeed.key,
-              },
-            ],
-          },
-          select: {
-            id: true,
-            syncRunId: true,
-            stagedProjectId: true,
-            jiraEpicId: true,
-            key: true,
-            summary: true,
-            status: true,
-            jiraUpdatedAt: true,
-          },
-        }),
-      params.signal,
-    ));
-
-  const epic = existingEpic
-    ? await runWithAbortCheck(
-        () =>
-          prisma.stagedEpic.update({
-            where: {
-              id: existingEpic.id,
-            },
-            data: mergeEpicValues(existingEpic, params.epicSeed),
-          }),
-        params.signal,
-      )
-    : await runWithAbortCheck(
-        () =>
-          prisma.stagedEpic.create({
-            data: {
-              syncRunId: params.syncRunId,
-              stagedProjectId: params.stagedProjectId,
-              jiraEpicId: params.epicSeed.jiraEpicId,
-              key: params.epicSeed.key,
-              summary: params.epicSeed.summary,
-              status: params.epicSeed.status,
-              jiraUpdatedAt: params.epicSeed.jiraUpdatedAt,
-            },
-          }),
-        params.signal,
-      );
-
-  const persistedEpic: PersistedEpicRecord = {
-    id: epic.id,
-    syncRunId: epic.syncRunId,
-    stagedProjectId: epic.stagedProjectId,
-    jiraEpicId: epic.jiraEpicId,
-    key: epic.key,
-    summary: epic.summary,
-    status: epic.status,
-    jiraUpdatedAt: epic.jiraUpdatedAt,
-  };
-
-  params.epicCache.set(
-    buildEpicCacheKey(params.stagedProjectId, persistedEpic.jiraEpicId),
-    persistedEpic,
-  );
-  params.epicCache.set(
-    buildEpicCacheKey(params.stagedProjectId, persistedEpic.key),
-    persistedEpic,
-  );
-
-  return epic;
-}
-
-async function runWithAbortCheck<T>(
-  task: () => Promise<T>,
-  signal?: AbortSignal,
-) {
-  throwIfAborted(signal);
-  const result = await task();
-  throwIfAborted(signal);
-
-  return result;
-}
+const BULK_CHUNK_SIZE = 500;
 
 /**
- * Bulk upsert via raw SQL: INSERT ... ON CONFLICT DO UPDATE.
- * Uses parameterized queries — no SQL injection risk.
+ * Bulk upsert via raw SQL with RETURNING.
+ * Like bulkUpsertRaw but returns specified columns for FK resolution.
+ * Chunks rows to stay under PostgreSQL's parameter limit (~65535).
  */
-async function bulkUpsertRaw(params: {
+async function bulkUpsertReturning(params: {
   table: string;
   columns: string[];
   conflictColumns: string[];
+  returningColumns: string[];
   rows: Record<string, unknown>[];
   signal?: AbortSignal;
   updateOverrides?: Record<string, string>;
-}): Promise<void> {
-  const { table, columns, conflictColumns, rows, signal, updateOverrides } = params;
-  if (rows.length === 0) return;
-  throwIfAborted(signal);
+  typeCasts?: Record<string, string>;
+}): Promise<Record<string, unknown>[]> {
+  const {
+    table,
+    columns,
+    conflictColumns,
+    returningColumns,
+    rows,
+    signal,
+    updateOverrides,
+    typeCasts,
+  } = params;
+  if (rows.length === 0) return [];
 
   const nonConflictColumns = columns.filter(
     (col) => !conflictColumns.includes(col),
@@ -431,26 +312,237 @@ async function bulkUpsertRaw(params: {
     .join(", ");
 
   const columnList = columns.map((col) => `"${col}"`).join(", ");
+  const conflictList = conflictColumns
+    .map((col) => `"${col}"`)
+    .join(", ");
+  const returningList = returningColumns
+    .map((col) => `"${col}"`)
+    .join(", ");
 
-  const allValues: unknown[] = [];
-  const valueClauses: string[] = [];
-  let paramIdx = 1;
+  const baseSql = `INSERT INTO "${table}" (${columnList}) VALUES %s ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet} RETURNING ${returningList}`;
 
-  for (const row of rows) {
-    const rowPlaceholders: string[] = [];
-    for (const col of columns) {
-      allValues.push(row[col] ?? null);
-      rowPlaceholders.push(`$${paramIdx++}`);
+  const allResults: Record<string, unknown>[] = [];
+
+  for (let offset = 0; offset < rows.length; offset += BULK_CHUNK_SIZE) {
+    throwIfAborted(signal);
+    const chunk = rows.slice(offset, offset + BULK_CHUNK_SIZE);
+
+    const allValues: unknown[] = [];
+    const valueClauses: string[] = [];
+    let paramIdx = 1;
+
+    for (const row of chunk) {
+      const rowPlaceholders: string[] = [];
+      for (const col of columns) {
+        allValues.push(row[col] ?? null);
+        const cast = typeCasts?.[col];
+        rowPlaceholders.push(cast ? `$${paramIdx}::${cast}` : `$${paramIdx}`);
+        paramIdx++;
+      }
+      valueClauses.push(`(${rowPlaceholders.join(", ")})`);
     }
-    valueClauses.push(`(${rowPlaceholders.join(", ")})`);
+
+    const sql = baseSql.replace("%s", valueClauses.join(", "));
+    const chunkResult = (await prisma.$queryRawUnsafe(
+      sql,
+      ...allValues,
+    )) as Record<string, unknown>[];
+    allResults.push(...chunkResult);
   }
 
-  const conflictList = conflictColumns.map((col) => `"${col}"`).join(", ");
-
-  const sql = `INSERT INTO "${table}" (${columnList}) VALUES ${valueClauses.join(", ")} ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet}`;
-
-  await prisma.$queryRawUnsafe(sql, ...allValues);
   throwIfAborted(signal);
+  return allResults;
+}
+
+/**
+ * Bulk INSERT ... RETURNING for publish phase (inside $transaction).
+ * No ON CONFLICT — publish uses delete-then-recreate pattern.
+ */
+async function rawSqlCreateReturning(params: {
+  table: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  returningColumns: string[];
+  tx: Prisma.TransactionClient;
+  signal?: AbortSignal;
+  typeCasts?: Record<string, string>;
+}): Promise<Record<string, unknown>[]> {
+  const { table, columns, rows, returningColumns, tx, signal, typeCasts } = params;
+  if (rows.length === 0) return [];
+
+  const columnList = columns.map((col) => `"${col}"`).join(", ");
+  const returningList = returningColumns
+    .map((col) => `"${col}"`)
+    .join(", ");
+
+  const baseSql = `INSERT INTO "${table}" (${columnList}) VALUES %s RETURNING ${returningList}`;
+
+  const allResults: Record<string, unknown>[] = [];
+
+  for (let offset = 0; offset < rows.length; offset += BULK_CHUNK_SIZE) {
+    throwIfAborted(signal);
+    const chunk = rows.slice(offset, offset + BULK_CHUNK_SIZE);
+
+    const allValues: unknown[] = [];
+    const valueClauses: string[] = [];
+    let paramIdx = 1;
+
+    for (const row of chunk) {
+      const rowPlaceholders: string[] = [];
+      for (const col of columns) {
+        allValues.push(row[col] ?? null);
+        const cast = typeCasts?.[col];
+        rowPlaceholders.push(cast ? `$${paramIdx}::${cast}` : `$${paramIdx}`);
+        paramIdx++;
+      }
+      valueClauses.push(`(${rowPlaceholders.join(", ")})`);
+    }
+
+    const sql = baseSql.replace("%s", valueClauses.join(", "));
+    const chunkResult = (await tx.$queryRawUnsafe(
+      sql,
+      ...allValues,
+    )) as Record<string, unknown>[];
+    allResults.push(...chunkResult);
+  }
+
+  throwIfAborted(signal);
+  return allResults;
+}
+
+type CollectedTransition = {
+  jiraIssueId: string;
+  jiraProjectId: string;
+  fromStatus: string | null;
+  toStatus: string;
+  changedAt: Date;
+};
+
+function collectEntities(
+  issues: JiraIssue[],
+  syncRunId: string,
+  timezone: string,
+  workflowRules: JiraWorkflowRules,
+  epicLinkFieldId?: string,
+  storyPointFieldIds?: string[],
+  developmentFieldIds?: string[],
+) {
+  const projectMap = new Map<string, ProjectSeed>();
+  const assigneeMap = new Map<string, {
+    jiraAccountId: string;
+    displayName: string;
+    email: string | null;
+    color: string;
+  }>();
+  const epicMap = new Map<string, EpicSeed>();
+  const issueRecords: {
+    jiraProjectId: string;
+    jiraIssueId: string;
+    jiraEpicKey: string | null;
+    jiraAccountId: string | null;
+    isEpic: boolean;
+    key: string;
+    summary: string;
+    status: string;
+    issueType: string;
+    priority: string | null;
+    dueAt: Date | null;
+    resolvedAt: Date | null;
+    startedAt: Date | null;
+    markerAt: Date | null;
+    markerKind: string;
+    jiraCreatedAt: Date | null;
+    jiraUpdatedAt: Date | null;
+    rawPayload: Prisma.InputJsonValue;
+  }[] = [];
+  const transitionRecords: CollectedTransition[] = [];
+
+  const epicLookup = buildEpicLookup(issues);
+
+  for (const issue of issues) {
+    // Project
+    const projectSeed = buildProjectSeed(issue);
+    projectMap.set(projectSeed.jiraProjectId, projectSeed);
+
+    // Assignee
+    const assigneeDetails = issue.fields.assignee;
+    const assigneeIdentity = deriveAssigneeIdentity(assigneeDetails);
+    if (assigneeDetails && assigneeIdentity) {
+      assigneeMap.set(assigneeIdentity, {
+        jiraAccountId: assigneeIdentity,
+        displayName: assigneeDetails.displayName,
+        email: assigneeDetails.emailAddress ?? null,
+        color: deriveAssigneeColor(assigneeIdentity),
+      });
+    }
+
+    // Epic
+    const epicSeed =
+      buildEpicSeed(issue) ??
+      buildLinkedEpicSeed({ issue, epicLookup, epicLinkFieldId });
+    const epicKey = epicSeed?.key ?? null;
+    if (epicSeed) {
+      const existingEpic = epicMap.get(epicSeed.key);
+      epicMap.set(
+        epicSeed.key,
+        existingEpic ? mergeEpicSeeds(existingEpic, epicSeed) : epicSeed,
+      );
+    }
+
+    // Issue
+    const timelineFields = deriveTimelineFields(issue, workflowRules);
+    issueRecords.push({
+      jiraProjectId: projectSeed.jiraProjectId,
+      jiraIssueId: issue.id,
+      jiraEpicKey: epicKey,
+      jiraAccountId: assigneeIdentity ?? null,
+      isEpic: isEpicIssue(issue),
+      key: issue.key,
+      summary: issue.fields.summary,
+      status: issue.fields.status?.name ?? "Unknown",
+      issueType: issue.fields.issuetype?.name ?? "Unknown",
+      priority: issue.fields.priority?.name ?? null,
+      dueAt: parseJiraDate(issue.fields.duedate, timezone),
+      resolvedAt: parseJiraDate(issue.fields.resolutiondate, timezone),
+      startedAt: parseJiraDate(timelineFields.startAt, timezone),
+      markerAt: parseJiraDate(timelineFields.markerAt, timezone),
+      markerKind: toPrismaMarkerKind(timelineFields.markerKind),
+      jiraCreatedAt: parseJiraDate(issue.fields.created, timezone),
+      jiraUpdatedAt: parseJiraDate(issue.fields.updated, timezone),
+      rawPayload: toPrismaJson(
+        buildRawPayload(issue, storyPointFieldIds, developmentFieldIds),
+      ),
+    });
+
+    // Transitions
+    const statusTransitions = (issue.changelog?.histories ?? []).flatMap(
+      (history) =>
+        history.items
+          .filter(
+            (item): item is typeof item & { toString: string } =>
+              item.field === "status" && typeof item.toString === "string",
+          )
+          .map((item) => ({
+            changedAt: parseJiraDate(history.created),
+            fromStatus: item.fromString ?? null,
+            toStatus: item.toString,
+          })),
+    );
+
+    for (const t of statusTransitions) {
+      if (t.changedAt) {
+        transitionRecords.push({
+          jiraIssueId: issue.id,
+          jiraProjectId: projectSeed.jiraProjectId,
+          fromStatus: t.fromStatus,
+          toStatus: t.toStatus,
+          changedAt: t.changedAt,
+        });
+      }
+    }
+  }
+
+  return { projectMap, assigneeMap, epicMap, issueRecords, transitionRecords };
 }
 
 async function persistIssues(params: {
@@ -463,229 +555,185 @@ async function persistIssues(params: {
   developmentFieldIds?: string[];
   signal?: AbortSignal;
 }): Promise<PersistIssuesResult> {
-  const projects = new Set<string>();
-  const epics = new Set<string>();
-  const assignees = new Set<string>();
-  const syncedIssues = new Set<string>();
-  const transitions = new Set<string>();
-  const epicLookup = buildEpicLookup(params.issues);
-  const epicCache = new Map<string, PersistedEpicRecord>();
+  throwIfAborted(params.signal);
 
-  for (const issue of params.issues) {
-    throwIfAborted(params.signal);
-    const projectSeed = buildProjectSeed(issue);
-    const stagedProject = await runWithAbortCheck(
-      () =>
-        prisma.stagedJiraProject.upsert({
-          where: {
-            syncRunId_jiraProjectId: {
-              syncRunId: params.syncRunId,
-              jiraProjectId: projectSeed.jiraProjectId,
-            },
-          },
-          update: {
-            key: projectSeed.key,
-            name: projectSeed.name,
-          },
-          create: {
-            syncRunId: params.syncRunId,
-            jiraProjectId: projectSeed.jiraProjectId,
-            key: projectSeed.key,
-            name: projectSeed.name,
-          },
-        }),
-      params.signal,
-    );
-    projects.add(stagedProject.key);
+  // Phase A: Collect and deduplicate (pure JS, 0 queries)
+  const collected = collectEntities(
+    params.issues,
+    params.syncRunId,
+    params.timezone,
+    params.workflowRules,
+    params.epicLinkFieldId,
+    params.storyPointFieldIds,
+    params.developmentFieldIds,
+  );
 
-    const assigneeDetails = issue.fields.assignee;
-    const assigneeIdentity = deriveAssigneeIdentity(assigneeDetails);
-    const stagedAssignee = assigneeDetails
-      && assigneeIdentity
-      ? await runWithAbortCheck(
-          () =>
-            prisma.stagedAssignee.upsert({
-              where: {
-                syncRunId_jiraAccountId: {
-                  syncRunId: params.syncRunId,
-                  jiraAccountId: assigneeIdentity,
-                },
-              },
-              update: {
-                displayName: assigneeDetails.displayName,
-                email: assigneeDetails.emailAddress ?? null,
-                color: deriveAssigneeColor(assigneeIdentity),
-              },
-              create: {
-                syncRunId: params.syncRunId,
-                jiraAccountId: assigneeIdentity,
-                displayName: assigneeDetails.displayName,
-                email: assigneeDetails.emailAddress ?? null,
-                color: deriveAssigneeColor(assigneeIdentity),
-              },
-            }),
-          params.signal,
-        )
-      : null;
+  // Phase B: Bulk upsert in FK dependency order
 
-    if (stagedAssignee) {
-      assignees.add(stagedAssignee.jiraAccountId);
-    }
+  // B1: Projects
+  const projectRows = [...collected.projectMap.values()].map((p) => ({
+    syncRunId: params.syncRunId,
+    jiraProjectId: p.jiraProjectId,
+    key: p.key,
+    name: p.name,
+  }));
 
-    const epicSeed =
-      buildEpicSeed(issue) ??
-      buildLinkedEpicSeed({
-        issue,
-        epicLookup,
-        epicLinkFieldId: params.epicLinkFieldId,
-      });
-    const stagedEpic = epicSeed
-      ? await upsertStagedEpic({
-          syncRunId: params.syncRunId,
-          stagedProjectId: stagedProject.id,
-          epicSeed,
-          epicCache,
-          signal: params.signal,
-        })
-      : null;
+  const projectResults = await bulkUpsertReturning({
+    table: "StagedJiraProject",
+    columns: ["syncRunId", "jiraProjectId", "key", "name"],
+    conflictColumns: ["syncRunId", "jiraProjectId"],
+    returningColumns: ["id", "jiraProjectId"],
+    rows: projectRows,
+    signal: params.signal,
+  });
 
-    if (stagedEpic) {
-      epics.add(stagedEpic.key);
-    }
-
-    const timelineFields = deriveTimelineFields(issue, params.workflowRules);
-    const persistedIssue = await runWithAbortCheck(
-      () =>
-        prisma.stagedIssue.upsert({
-          where: {
-            syncRunId_stagedProjectId_jiraIssueId: {
-              syncRunId: params.syncRunId,
-              stagedProjectId: stagedProject.id,
-              jiraIssueId: issue.id,
-            },
-          },
-          update: {
-            stagedEpicId: isEpicIssue(issue) ? null : (stagedEpic?.id ?? null),
-            stagedAssigneeId: stagedAssignee?.id ?? null,
-            key: issue.key,
-            summary: issue.fields.summary,
-            status: issue.fields.status?.name ?? "Unknown",
-            issueType: issue.fields.issuetype?.name ?? "Unknown",
-            priority: issue.fields.priority?.name ?? null,
-            dueAt: parseJiraDate(issue.fields.duedate, params.timezone),
-            resolvedAt: parseJiraDate(
-              issue.fields.resolutiondate,
-              params.timezone,
-            ),
-            startedAt: parseJiraDate(timelineFields.startAt, params.timezone),
-            markerAt: parseJiraDate(timelineFields.markerAt, params.timezone),
-            markerKind: toPrismaMarkerKind(timelineFields.markerKind),
-            jiraCreatedAt: parseJiraDate(issue.fields.created, params.timezone),
-            jiraUpdatedAt: parseJiraDate(issue.fields.updated, params.timezone),
-            rawPayload: toPrismaJson(
-              buildRawPayload(
-                issue,
-                params.storyPointFieldIds,
-                params.developmentFieldIds,
-              ),
-            ),
-          },
-          create: {
-            syncRunId: params.syncRunId,
-            stagedProjectId: stagedProject.id,
-            stagedEpicId: isEpicIssue(issue) ? null : (stagedEpic?.id ?? null),
-            stagedAssigneeId: stagedAssignee?.id ?? null,
-            jiraIssueId: issue.id,
-            key: issue.key,
-            summary: issue.fields.summary,
-            status: issue.fields.status?.name ?? "Unknown",
-            issueType: issue.fields.issuetype?.name ?? "Unknown",
-            priority: issue.fields.priority?.name ?? null,
-            dueAt: parseJiraDate(issue.fields.duedate, params.timezone),
-            resolvedAt: parseJiraDate(
-              issue.fields.resolutiondate,
-              params.timezone,
-            ),
-            startedAt: parseJiraDate(timelineFields.startAt, params.timezone),
-            markerAt: parseJiraDate(timelineFields.markerAt, params.timezone),
-            markerKind: toPrismaMarkerKind(timelineFields.markerKind),
-            jiraCreatedAt: parseJiraDate(issue.fields.created, params.timezone),
-            jiraUpdatedAt: parseJiraDate(issue.fields.updated, params.timezone),
-            rawPayload: toPrismaJson(
-              buildRawPayload(
-                issue,
-                params.storyPointFieldIds,
-                params.developmentFieldIds,
-              ),
-            ),
-          },
-        }),
-      params.signal,
-    );
-    syncedIssues.add(persistedIssue.key);
-
-    const statusTransitions = (issue.changelog?.histories ?? []).flatMap((history) =>
-      history.items
-        .filter(
-          (item): item is typeof item & { toString: string } =>
-            item.field === "status" && typeof item.toString === "string",
-        )
-        .map((item) => ({
-          changedAt: parseJiraDate(history.created),
-          fromStatus: item.fromString ?? null,
-          toStatus: item.toString,
-        })),
-    );
-
-    for (const transition of statusTransitions) {
-      throwIfAborted(params.signal);
-
-      const changedAt = transition.changedAt;
-
-      if (!changedAt) {
-        continue;
-      }
-
-      await runWithAbortCheck(
-        () =>
-          prisma.stagedIssueStatusHistory.upsert({
-            where: {
-              syncRunId_stagedIssueId_changedAt_toStatus: {
-                syncRunId: params.syncRunId,
-                stagedIssueId: persistedIssue.id,
-                changedAt,
-                toStatus: transition.toStatus,
-              },
-            },
-            update: {
-              fromStatus: transition.fromStatus,
-            },
-            create: {
-              syncRunId: params.syncRunId,
-              stagedIssueId: persistedIssue.id,
-              fromStatus: transition.fromStatus,
-              toStatus: transition.toStatus,
-              changedAt,
-            },
-          }),
-        params.signal,
-      );
-
-      transitions.add(
-        `${persistedIssue.id}:${changedAt.toISOString()}:${transition.toStatus}`,
-      );
-    }
+  const projectIdMap = new Map<string, string>();
+  for (const row of projectResults) {
+    projectIdMap.set(row.jiraProjectId as string, row.id as string);
   }
 
+  // B2: Assignees
+  const assigneeRows = [...collected.assigneeMap.values()].map((a) => ({
+    syncRunId: params.syncRunId,
+    jiraAccountId: a.jiraAccountId,
+    displayName: a.displayName,
+    email: a.email,
+    color: a.color,
+  }));
+
+  const assigneeResults = await bulkUpsertReturning({
+    table: "StagedAssignee",
+    columns: ["syncRunId", "jiraAccountId", "displayName", "email", "color"],
+    conflictColumns: ["syncRunId", "jiraAccountId"],
+    returningColumns: ["id", "jiraAccountId"],
+    rows: assigneeRows,
+    signal: params.signal,
+  });
+
+  const assigneeIdMap = new Map<string, string>();
+  for (const row of assigneeResults) {
+    assigneeIdMap.set(row.jiraAccountId as string, row.id as string);
+  }
+
+  // B3: Epics — need stagedProjectId from B1
+  const epicRows = [...collected.epicMap.values()].map((e) => {
+    // Find which project this epic belongs to via issueRecords
+    const issueWithEpic = collected.issueRecords.find(
+      (i) => i.jiraEpicKey === e.key,
+    );
+    const stagedProjectId = issueWithEpic
+      ? projectIdMap.get(issueWithEpic.jiraProjectId)!
+      : "";
+
+    return {
+      syncRunId: params.syncRunId,
+      stagedProjectId,
+      jiraEpicId: e.jiraEpicId,
+      key: e.key,
+      summary: e.summary,
+      status: e.status,
+      jiraUpdatedAt: e.jiraUpdatedAt,
+    };
+  }).filter((r) => r.stagedProjectId);
+
+  const epicResults = await bulkUpsertReturning({
+    table: "StagedEpic",
+    columns: [
+      "syncRunId", "stagedProjectId", "jiraEpicId", "key",
+      "summary", "status", "jiraUpdatedAt",
+    ],
+    conflictColumns: ["syncRunId", "stagedProjectId", "key"],
+    returningColumns: ["id", "key"],
+    rows: epicRows,
+    signal: params.signal,
+  });
+
+  const epicIdMap = new Map<string, string>();
+  for (const row of epicResults) {
+    epicIdMap.set(row.key as string, row.id as string);
+  }
+
+  // B4: Issues — need stagedProjectId, stagedEpicId, stagedAssigneeId
+  const issueRows = collected.issueRecords.map((i) => ({
+    syncRunId: params.syncRunId,
+    stagedProjectId: projectIdMap.get(i.jiraProjectId)!,
+    stagedEpicId: i.isEpic ? null : (epicIdMap.get(i.jiraEpicKey ?? "") ?? null),
+    stagedAssigneeId: i.jiraAccountId
+      ? (assigneeIdMap.get(i.jiraAccountId) ?? null)
+      : null,
+    jiraIssueId: i.jiraIssueId,
+    key: i.key,
+    summary: i.summary,
+    status: i.status,
+    issueType: i.issueType,
+    priority: i.priority,
+    dueAt: i.dueAt,
+    resolvedAt: i.resolvedAt,
+    startedAt: i.startedAt,
+    markerAt: i.markerAt,
+    markerKind: i.markerKind,
+    jiraCreatedAt: i.jiraCreatedAt,
+    jiraUpdatedAt: i.jiraUpdatedAt,
+    rawPayload: i.rawPayload,
+  }));
+
+  const issueResults = await bulkUpsertReturning({
+    table: "StagedIssue",
+    columns: [
+      "syncRunId", "stagedProjectId", "stagedEpicId", "stagedAssigneeId",
+      "jiraIssueId", "key", "summary", "status", "issueType", "priority",
+      "dueAt", "resolvedAt", "startedAt", "markerAt", "markerKind",
+      "jiraCreatedAt", "jiraUpdatedAt", "rawPayload",
+    ],
+    conflictColumns: ["syncRunId", "stagedProjectId", "jiraIssueId"],
+    returningColumns: ["id", "jiraIssueId"],
+    rows: issueRows,
+    signal: params.signal,
+    typeCasts: {
+      markerKind: "text",
+      rawPayload: "jsonb",
+    },
+  });
+
+  const issueIdMap = new Map<string, string>();
+  for (const row of issueResults) {
+    issueIdMap.set(row.jiraIssueId as string, row.id as string);
+  }
+
+  // B5: Transitions — need stagedIssueId from B4
+  const transitionRows = collected.transitionRecords.map((t) => ({
+    syncRunId: params.syncRunId,
+    stagedIssueId: issueIdMap.get(t.jiraIssueId)!,
+    fromStatus: t.fromStatus,
+    toStatus: t.toStatus,
+    changedAt: t.changedAt,
+  })).filter((r) => r.stagedIssueId);
+
+  await bulkUpsertReturning({
+    table: "StagedIssueStatusHistory",
+    columns: [
+      "syncRunId", "stagedIssueId", "fromStatus", "toStatus", "changedAt",
+    ],
+    conflictColumns: ["syncRunId", "stagedIssueId", "changedAt", "toStatus"],
+    returningColumns: ["id"],
+    rows: transitionRows,
+    signal: params.signal,
+  });
+
+  // Phase C: Build result from collected data
+  const projectKeys = [...collected.projectMap.values()].map((p) => p.key);
+  const epicKeys = [...collected.epicMap.keys()];
+  const assigneeIds = [...collected.assigneeMap.keys()];
+
   return {
-    projectsSynced: projects.size,
-    epicsSynced: epics.size,
-    assigneesSynced: assignees.size,
-    issuesSynced: syncedIssues.size,
-    statusTransitionsSynced: transitions.size,
-    projectKeys: [...projects],
-    epicKeys: [...epics],
-    assigneeIds: [...assignees],
+    projectsSynced: collected.projectMap.size,
+    epicsSynced: collected.epicMap.size,
+    assigneesSynced: collected.assigneeMap.size,
+    issuesSynced: collected.issueRecords.length,
+    statusTransitionsSynced: collected.transitionRecords.length,
+    projectKeys,
+    epicKeys,
+    assigneeIds,
   };
 }
 
@@ -901,112 +949,149 @@ async function publishSyncRun(params: {
     });
 
     const publishedProjectIds = new Map<string, string>();
-    for (const stagedProject of stagedProjects) {
-      throwIfAborted(params.signal);
 
-      const project = await tx.jiraProject.create({
-        data: {
-          jiraConnectionId: params.jiraConnectionId,
-          jiraProjectId: stagedProject.jiraProjectId,
-          key: stagedProject.key,
-          name: stagedProject.name,
-        },
+    if (stagedProjects.length > 0) {
+      const projectRows = stagedProjects.map((sp) => ({
+        jiraConnectionId: params.jiraConnectionId,
+        jiraProjectId: sp.jiraProjectId,
+        key: sp.key,
+        name: sp.name,
+      }));
+
+      const projectResults = await rawSqlCreateReturning({
+        table: "JiraProject",
+        columns: ["jiraConnectionId", "jiraProjectId", "key", "name"],
+        rows: projectRows,
+        returningColumns: ["id"],
+        tx,
+        signal: params.signal,
       });
 
-      publishedProjectIds.set(stagedProject.id, project.id);
+      for (let i = 0; i < stagedProjects.length; i++) {
+        publishedProjectIds.set(stagedProjects[i].id, projectResults[i].id as string);
+      }
     }
 
     const publishedAssigneeIds = new Map<string, string>();
-    for (const stagedAssignee of stagedAssignees) {
-      throwIfAborted(params.signal);
 
-      const assignee = await tx.assignee.create({
-        data: {
-          jiraConnectionId: params.jiraConnectionId,
-          jiraAccountId: stagedAssignee.jiraAccountId,
-          displayName: stagedAssignee.displayName,
-          email: stagedAssignee.email,
-          color: stagedAssignee.color,
-        },
+    if (stagedAssignees.length > 0) {
+      const assigneeRows = stagedAssignees.map((sa) => ({
+        jiraConnectionId: params.jiraConnectionId,
+        jiraAccountId: sa.jiraAccountId,
+        displayName: sa.displayName,
+        email: sa.email,
+        color: sa.color,
+      }));
+
+      const assigneeResults = await rawSqlCreateReturning({
+        table: "Assignee",
+        columns: ["jiraConnectionId", "jiraAccountId", "displayName", "email", "color"],
+        rows: assigneeRows,
+        returningColumns: ["id"],
+        tx,
+        signal: params.signal,
       });
 
-      publishedAssigneeIds.set(stagedAssignee.id, assignee.id);
+      for (let i = 0; i < stagedAssignees.length; i++) {
+        publishedAssigneeIds.set(stagedAssignees[i].id, assigneeResults[i].id as string);
+      }
     }
 
     const publishedEpicIds = new Map<string, string>();
-    for (const stagedEpic of stagedEpics) {
-      throwIfAborted(params.signal);
 
-      const jiraProjectId = publishedProjectIds.get(stagedEpic.stagedProjectId);
-
-      if (!jiraProjectId) {
-        throw new Error("Unable to publish an epic without a project.");
-      }
-
-      const epic = await tx.epic.create({
-        data: {
+    if (stagedEpics.length > 0) {
+      const epicRows = stagedEpics.map((se) => {
+        const jiraProjectId = publishedProjectIds.get(se.stagedProjectId);
+        if (!jiraProjectId) {
+          throw new Error("Unable to publish an epic without a project.");
+        }
+        return {
           jiraProjectId,
-          jiraEpicId: stagedEpic.jiraEpicId,
-          key: stagedEpic.key,
-          summary: stagedEpic.summary,
-          status: stagedEpic.status,
-          rank: stagedEpic.rank,
-          jiraUpdatedAt: stagedEpic.jiraUpdatedAt,
-        },
+          jiraEpicId: se.jiraEpicId,
+          key: se.key,
+          summary: se.summary,
+          status: se.status,
+          rank: se.rank,
+          jiraUpdatedAt: se.jiraUpdatedAt,
+        };
       });
 
-      publishedEpicIds.set(stagedEpic.id, epic.id);
+      const epicResults = await rawSqlCreateReturning({
+        table: "Epic",
+        columns: ["jiraProjectId", "jiraEpicId", "key", "summary", "status", "rank", "jiraUpdatedAt"],
+        rows: epicRows,
+        returningColumns: ["id"],
+        tx,
+        signal: params.signal,
+      });
+
+      for (let i = 0; i < stagedEpics.length; i++) {
+        publishedEpicIds.set(stagedEpics[i].id, epicResults[i].id as string);
+      }
     }
 
     const publishedIssueIds = new Map<string, string>();
-    for (const stagedIssue of stagedIssues) {
-      throwIfAborted(params.signal);
 
-      const jiraProjectId = publishedProjectIds.get(stagedIssue.stagedProjectId);
-
-      if (!jiraProjectId) {
-        throw new Error("Unable to publish an issue without a project.");
-      }
-
-      const epicId = stagedIssue.stagedEpicId
-        ? publishedEpicIds.get(stagedIssue.stagedEpicId)
-        : null;
-
-      if (stagedIssue.stagedEpicId && !epicId) {
-        throw new Error("Unable to publish an issue with a missing epic.");
-      }
-
-      const assigneeId = stagedIssue.stagedAssigneeId
-        ? publishedAssigneeIds.get(stagedIssue.stagedAssigneeId)
-        : null;
-
-      if (stagedIssue.stagedAssigneeId && !assigneeId) {
-        throw new Error("Unable to publish an issue with a missing assignee.");
-      }
-
-      const issue = await tx.issue.create({
-        data: {
+    if (stagedIssues.length > 0) {
+      const issueRows = stagedIssues.map((si) => {
+        const jiraProjectId = publishedProjectIds.get(si.stagedProjectId);
+        if (!jiraProjectId) {
+          throw new Error("Unable to publish an issue without a project.");
+        }
+        const epicId = si.stagedEpicId
+          ? publishedEpicIds.get(si.stagedEpicId)
+          : null;
+        if (si.stagedEpicId && !epicId) {
+          throw new Error("Unable to publish an issue with a missing epic.");
+        }
+        const assigneeId = si.stagedAssigneeId
+          ? publishedAssigneeIds.get(si.stagedAssigneeId)
+          : null;
+        if (si.stagedAssigneeId && !assigneeId) {
+          throw new Error("Unable to publish an issue with a missing assignee.");
+        }
+        return {
           jiraProjectId,
           epicId,
           assigneeId,
-          jiraIssueId: stagedIssue.jiraIssueId,
-          key: stagedIssue.key,
-          summary: stagedIssue.summary,
-          status: stagedIssue.status,
-          issueType: stagedIssue.issueType,
-          priority: stagedIssue.priority,
-          dueAt: stagedIssue.dueAt,
-          resolvedAt: stagedIssue.resolvedAt,
-          startedAt: stagedIssue.startedAt,
-          markerAt: stagedIssue.markerAt,
-          markerKind: stagedIssue.markerKind,
-          jiraCreatedAt: stagedIssue.jiraCreatedAt,
-          jiraUpdatedAt: stagedIssue.jiraUpdatedAt,
-          rawPayload: toNullablePrismaJson(stagedIssue.rawPayload),
+          jiraIssueId: si.jiraIssueId,
+          key: si.key,
+          summary: si.summary,
+          status: si.status,
+          issueType: si.issueType,
+          priority: si.priority,
+          dueAt: si.dueAt,
+          resolvedAt: si.resolvedAt,
+          startedAt: si.startedAt,
+          markerAt: si.markerAt,
+          markerKind: si.markerKind,
+          jiraCreatedAt: si.jiraCreatedAt,
+          jiraUpdatedAt: si.jiraUpdatedAt,
+          rawPayload: si.rawPayload,
+        };
+      });
+
+      const issueResults = await rawSqlCreateReturning({
+        table: "Issue",
+        columns: [
+          "jiraProjectId", "epicId", "assigneeId", "jiraIssueId", "key",
+          "summary", "status", "issueType", "priority", "dueAt", "resolvedAt",
+          "startedAt", "markerAt", "markerKind", "jiraCreatedAt", "jiraUpdatedAt",
+          "rawPayload",
+        ],
+        rows: issueRows,
+        returningColumns: ["id"],
+        tx,
+        signal: params.signal,
+        typeCasts: {
+          markerKind: "text",
+          rawPayload: "jsonb",
         },
       });
 
-      publishedIssueIds.set(stagedIssue.id, issue.id);
+      for (let i = 0; i < stagedIssues.length; i++) {
+        publishedIssueIds.set(stagedIssues[i].id, issueResults[i].id as string);
+      }
     }
 
     if (stagedIssueHistory.length > 0) {
