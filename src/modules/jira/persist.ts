@@ -401,6 +401,58 @@ async function runWithAbortCheck<T>(
   return result;
 }
 
+/**
+ * Bulk upsert via raw SQL: INSERT ... ON CONFLICT DO UPDATE.
+ * Uses parameterized queries — no SQL injection risk.
+ */
+async function bulkUpsertRaw(params: {
+  table: string;
+  columns: string[];
+  conflictColumns: string[];
+  rows: Record<string, unknown>[];
+  signal?: AbortSignal;
+  updateOverrides?: Record<string, string>;
+}): Promise<void> {
+  const { table, columns, conflictColumns, rows, signal, updateOverrides } = params;
+  if (rows.length === 0) return;
+  throwIfAborted(signal);
+
+  const nonConflictColumns = columns.filter(
+    (col) => !conflictColumns.includes(col),
+  );
+
+  const updateSet = nonConflictColumns
+    .map((col) => {
+      if (updateOverrides && col in updateOverrides) {
+        return `"${col}" = ${updateOverrides[col]}`;
+      }
+      return `"${col}" = EXCLUDED."${col}"`;
+    })
+    .join(", ");
+
+  const columnList = columns.map((col) => `"${col}"`).join(", ");
+
+  const allValues: unknown[] = [];
+  const valueClauses: string[] = [];
+  let paramIdx = 1;
+
+  for (const row of rows) {
+    const rowPlaceholders: string[] = [];
+    for (const col of columns) {
+      allValues.push(row[col] ?? null);
+      rowPlaceholders.push(`$${paramIdx++}`);
+    }
+    valueClauses.push(`(${rowPlaceholders.join(", ")})`);
+  }
+
+  const conflictList = conflictColumns.map((col) => `"${col}"`).join(", ");
+
+  const sql = `INSERT INTO "${table}" (${columnList}) VALUES ${valueClauses.join(", ")} ON CONFLICT (${conflictList}) DO UPDATE SET ${updateSet}`;
+
+  await prisma.$queryRawUnsafe(sql, ...allValues);
+  throwIfAborted(signal);
+}
+
 async function persistIssues(params: {
   syncRunId: string;
   timezone: string;
