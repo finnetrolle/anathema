@@ -19,3 +19,13 @@ export function isAbortError(error: unknown) {
     (error instanceof Error && error.name === "AbortError")
   );
 }
+
+export function combineSignals(
+  parent?: AbortSignal,
+  timeoutMs?: number,
+): AbortSignal | undefined {
+  if (!parent && timeoutMs == null) return undefined;
+  if (!parent) return AbortSignal.timeout(timeoutMs!);
+  if (timeoutMs == null) return parent;
+  return AbortSignal.any([parent, AbortSignal.timeout(timeoutMs)]);
+}

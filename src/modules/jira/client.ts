@@ -3,7 +3,7 @@ import type {
   JiraSearchResponse,
 } from "@/modules/jira/types";
 import { readJsonResponse } from "@/modules/http/read-json-response";
-import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
+import { combineSignals, isAbortError, throwIfAborted } from "@/modules/jira/abort";
 
 type SearchJiraIssuesPageInput = {
   jql?: string;
@@ -63,6 +63,10 @@ const DEFAULT_FIELDS = [
 const STORY_POINT_NAME_PATTERN = /^story point(s)?( estimate| estimation)?$/i;
 const RETRYABLE_SEARCH_STATUSES = new Set([408, 429, 502, 503, 504]);
 const MIN_JIRA_PAGE_SIZE = 10;
+const JIRA_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RETRY_ATTEMPTS = 5;
+const RETRY_BASE_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 30_000;
 
 export function readJiraCredentials(): JiraCredentials {
   const connectionName = process.env.JIRA_CONNECTION_NAME ?? "Primary Jira";
@@ -201,8 +205,9 @@ async function fetchJson<T>(
     htmlHint?: string;
   },
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
-  throwIfAborted(init.signal ?? undefined);
-  const response = await fetch(input, init);
+  const signal = combineSignals(init.signal ?? undefined, JIRA_REQUEST_TIMEOUT_MS);
+  throwIfAborted(signal);
+  const response = await fetch(input, { ...init, signal });
 
   if (!response.ok) {
     return {
@@ -374,6 +379,35 @@ export async function resolveJiraRuntimeConfig(
 }
 
 
+function parseRetryAfterMs(headers: Headers | undefined): number | null {
+  const value = headers?.get("Retry-After");
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return null;
+}
+
+function retryDelayMs(attempt: number): number {
+  const exponential = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+  const jitter = exponential * (0.5 + Math.random() * 0.5);
+  return Math.min(jitter, MAX_RETRY_DELAY_MS);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
 export async function searchJiraIssuesPage({
   jql,
   startAt = 0,
@@ -395,9 +429,11 @@ export async function searchJiraIssuesPage({
   ];
   const normalizedMinResults = Math.max(1, Math.min(minResults, maxResults));
   let pageSize = Math.max(maxResults, normalizedMinResults);
+  let attempt = 0;
 
   while (true) {
     throwIfAborted(signal);
+    const combinedSignal = combineSignals(signal, JIRA_REQUEST_TIMEOUT_MS);
     const response = await fetch(
       buildJiraApiUrl(activeRuntime.baseUrl, "/rest/api/{apiVersion}/search", {
         authMode: activeRuntime.authMode,
@@ -418,20 +454,32 @@ export async function searchJiraIssuesPage({
           expand: ["changelog"],
         }),
         cache: "no-store",
-        signal,
+        signal: combinedSignal,
       },
     );
 
     if (!response.ok && RETRYABLE_SEARCH_STATUSES.has(response.status)) {
+      attempt++;
+      if (attempt > MAX_RETRY_ATTEMPTS) {
+        throw new Error(
+          `Jira search failed after ${MAX_RETRY_ATTEMPTS} retries (last status ${response.status}).`,
+        );
+      }
+
+      const retryAfterMs = response.status === 429
+        ? parseRetryAfterMs(response.headers)
+        : null;
+      const delay = retryAfterMs ?? retryDelayMs(attempt - 1);
+      await sleep(delay, signal);
+
       const nextPageSize = Math.max(
         normalizedMinResults,
         Math.floor(pageSize / 2),
       );
-
       if (nextPageSize < pageSize) {
         pageSize = nextPageSize;
-        continue;
       }
+      continue;
     }
 
     if (!response.ok) {

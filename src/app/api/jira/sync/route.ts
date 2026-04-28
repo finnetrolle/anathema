@@ -1,8 +1,11 @@
 import { runJiraSync, runJiraSyncChunk } from "@/modules/jira/persist";
 import {
   JIRA_SYNC_ABORT_MESSAGE,
+  combineSignals,
   isAbortError,
 } from "@/modules/jira/abort";
+
+const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 
 type SyncRequestBody = {
   jql?: string;
@@ -12,6 +15,8 @@ type SyncRequestBody = {
 };
 
 export async function POST(request: Request) {
+  const signal = combineSignals(request.signal, SYNC_TIMEOUT_MS);
+
   try {
     const body = (await request.json().catch(() => ({}))) as SyncRequestBody;
     const requestedJql = body.jql?.trim() || undefined;
@@ -40,12 +45,12 @@ export async function POST(request: Request) {
             syncRunId: body.syncRunId,
             startAt,
             maxResults: 25,
-            signal: request.signal,
+            signal,
           })
         : await runJiraSync({
             jql: requestedJql,
             maxResults: 25,
-            signal: request.signal,
+            signal,
           });
 
     return Response.json(summary);
