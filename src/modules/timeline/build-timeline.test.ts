@@ -202,6 +202,75 @@ describe("buildTimelineModel", () => {
     expect(model.rows[0]?.items[0]?.span).toBe(3);
   });
 
+  it("renders same-day issue with span=1", () => {
+    const resolvedRange = resolveTimelineRange(
+      {
+        timezone: "Europe/Moscow",
+        rangeStart: "2026-04-13",
+        rangeEnd: "2026-04-17",
+      },
+      null,
+      new Date("2026-04-13T00:00:00.000Z"),
+    );
+    const model = buildTimelineModel(
+      [
+        makeEpic([
+          makeIssue({
+            startAt: "2026-04-14T08:00:00.000Z",
+            markerAt: "2026-04-14T18:00:00.000Z",
+          }),
+        ]),
+      ],
+      { resolvedRange },
+    );
+
+    expect(model.rows[0]?.items[0]?.span).toBe(1);
+    expect(model.rows[0]?.items[0]?.startColumn).toBe(2);
+  });
+
+  it("renders label fields correctly", () => {
+    const resolvedRange = resolveTimelineRange(
+      {
+        timezone: "Europe/Moscow",
+        rangeStart: "2026-04-13",
+        rangeEnd: "2026-04-17",
+      },
+      null,
+      new Date("2026-04-13T00:00:00.000Z"),
+    );
+    const model = buildTimelineModel(
+      [
+        makeEpic([
+          makeIssue({
+            startAt: "2026-04-13T08:00:00.000Z",
+            markerAt: "2026-04-14T18:00:00.000Z",
+            markerKind: "DONE",
+            resolvedAt: "2026-04-14T18:00:00.000Z",
+            dueAt: "2026-04-15T18:00:00.000Z",
+            observedPeople: ["Alice", "Bob"],
+            assigneeHistory: ["Alice"],
+            authorName: "Alice",
+            pullRequestStatus: "MERGED",
+            pullRequestCount: 2,
+            commitCount: 5,
+          }),
+        ]),
+      ],
+      { resolvedRange, locale: "en" },
+    );
+
+    const item = model.rows[0]?.items[0];
+    expect(item).toBeDefined();
+    expect(item!.markerLabel).toContain("Done");
+    expect(item!.startLabel).toContain("Started");
+    expect(item!.dueLabel).toContain("Due");
+    expect(item!.resolvedLabel).toContain("Finished");
+    expect(item!.observedPeople).toEqual(["Alice", "Bob"]);
+    expect(item!.pullRequestStatus).toBe("MERGED");
+    expect(item!.pullRequestCount).toBe(2);
+    expect(item!.commitCount).toBe(5);
+  });
+
   it("anchors not-started tasks without due date on today and extends them by estimate", () => {
     const now = new Date("2026-04-17T00:00:00.000Z");
     const resolvedRange = resolveTimelineRange(
