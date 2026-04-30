@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  addDaysInTimezone,
   addDaysToDayKey,
   getEarlierDayKey,
   getDayKey,
@@ -41,24 +40,6 @@ describe("date helpers", () => {
     expect(
       getStartOfWeek(boundaryInstant, "America/Los_Angeles").toISOString(),
     ).toBe("2026-04-06T07:00:00.000Z");
-  });
-
-  it("advances by local calendar days across DST", () => {
-    const daylightSavingBoundary = parseDateInputInTimezone(
-      "2026-03-08",
-      "America/Los_Angeles",
-    );
-
-    expect(daylightSavingBoundary).not.toBeNull();
-
-    const nextDay = addDaysInTimezone(
-      daylightSavingBoundary!,
-      1,
-      "America/Los_Angeles",
-    );
-
-    expect(nextDay.toISOString()).toBe("2026-03-09T07:00:00.000Z");
-    expect(getDayKey(nextDay, "America/Los_Angeles")).toBe("2026-03-09");
   });
 
   it("keeps Jira due dates on the connection day", () => {

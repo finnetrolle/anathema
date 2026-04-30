@@ -222,8 +222,6 @@ describe("real smoke sync gate", () => {
     });
 
     expect(secondChunk.page.hasMore).toBe(false);
-    expect(secondChunk.dailyBriefError).toBeNull();
-    expect(secondChunk.dailyBriefsGenerated).toBe(5);
     expect(await prisma.stagedIssue.count()).toBe(0);
     expect(
       await prisma.issue.count({

@@ -52,10 +52,10 @@ Use these defaults unless a human explicitly chooses a different path:
 
 ## Progress Tracker
 
-- [ ] Phase 1: Access control and sync hardening
-- [ ] Phase 2: Restore green quality gates
-- [ ] Phase 3: Data minimization and PII reduction
-- [ ] Phase 4: Runtime and deployment hardening
+- [x] Phase 1: Access control and sync hardening
+- [x] Phase 2: Restore green quality gates
+- [x] Phase 3: Data minimization and PII reduction
+- [x] Phase 4: Runtime and deployment hardening
 - [ ] Phase 5: Scalable sync publish/read architecture
 - [ ] Phase 6: File decomposition and maintainability
 - [ ] Final verification and documentation pass

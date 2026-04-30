@@ -87,8 +87,56 @@ export function buildRawPayload(
   storyPointFieldIds?: string[],
   developmentFieldIds?: string[],
 ) {
+  const customFields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(issue.fields)) {
+    if (key.startsWith("customfield_")) {
+      customFields[key] = value;
+    }
+  }
+
+  const stripUser = (
+    u: { displayName?: string } | null | undefined,
+  ) => (u ? { displayName: u.displayName } : u);
+
   return {
-    ...issue,
+    id: issue.id,
+    key: issue.key,
+    fields: {
+      summary: issue.fields.summary,
+      issuetype: issue.fields.issuetype,
+      status: issue.fields.status,
+      project: {
+        id: issue.fields.project?.id,
+        key: issue.fields.project?.key,
+        name: issue.fields.project?.name,
+      },
+      created: issue.fields.created,
+      updated: issue.fields.updated,
+      duedate: issue.fields.duedate,
+      resolutiondate: issue.fields.resolutiondate,
+      assignee: stripUser(issue.fields.assignee),
+      creator: stripUser(issue.fields.creator),
+      reporter: stripUser(issue.fields.reporter),
+      components: issue.fields.components,
+      timeoriginalestimate: issue.fields.timeoriginalestimate,
+      aggregatetimeoriginalestimate: issue.fields.aggregatetimeoriginalestimate,
+      parent: issue.fields.parent,
+      priority: issue.fields.priority,
+      ...customFields,
+    },
+    changelog: issue.changelog
+      ? {
+          histories: issue.changelog.histories?.map((h) => ({
+            id: h.id,
+            created: h.created,
+            items: h.items.map((item) => ({
+              field: item.field,
+              fromString: item.fromString,
+              toString: item.toString,
+            })),
+          })),
+        }
+      : undefined,
     __anathemaMeta: {
       storyPointFieldIds: storyPointFieldIds ?? [],
       developmentFieldIds: developmentFieldIds ?? [],
@@ -237,7 +285,6 @@ export function collectEntities(
   const assigneeMap = new Map<string, {
     jiraAccountId: string;
     displayName: string;
-    email: string | null;
     color: string;
   }>();
   const epicMap = new Map<string, EpicSeed>();
@@ -273,11 +320,10 @@ export function collectEntities(
     // Assignee
     const assigneeDetails = issue.fields.assignee;
     const assigneeIdentity = deriveAssigneeIdentity(assigneeDetails);
-    if (assigneeDetails && assigneeIdentity) {
+    if (assigneeDetails && assigneeIdentity && !assigneeMap.has(assigneeIdentity)) {
       assigneeMap.set(assigneeIdentity, {
         jiraAccountId: assigneeIdentity,
         displayName: assigneeDetails.displayName,
-        email: assigneeDetails.emailAddress ?? null,
         color: deriveAssigneeColor(assigneeIdentity),
       });
     }

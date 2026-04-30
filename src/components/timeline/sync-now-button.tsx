@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import { SYNC_ACTION_HEADER, SYNC_ACTION_VALUE } from "@/modules/auth/sync-action";
 import {
   useEffect,
   useId,
@@ -252,6 +253,7 @@ export function SyncNowButton({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            [SYNC_ACTION_HEADER]: SYNC_ACTION_VALUE,
           },
           body: JSON.stringify({
             chunked: true,

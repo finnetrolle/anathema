@@ -21,6 +21,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: "0"
+    image: anathema-app:latest
     container_name: anathema-app
     restart: unless-stopped
     depends_on:

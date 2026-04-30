@@ -14,13 +14,8 @@ vi.mock("@/modules/jira/abort", () => ({
   isAbortError: vi.fn((e: unknown) => e instanceof DOMException && e.name === "AbortError"),
 }));
 
-vi.mock("@/modules/jira/bulk-sql", () => ({
-  rawSqlCreateReturning: vi.fn().mockResolvedValue([{ id: "pub-1" }]),
-}));
-
 import { prisma } from "@/modules/db/prisma";
 import { throwIfAborted, isAbortError } from "@/modules/jira/abort";
-import { rawSqlCreateReturning } from "@/modules/jira/bulk-sql";
 import {
   acquireJiraConnectionLock,
   cleanupStagedSyncRun,
@@ -32,7 +27,6 @@ import {
 const mockPrisma = vi.mocked(prisma);
 const mockThrowIfAborted = vi.mocked(throwIfAborted);
 const mockIsAbortError = vi.mocked(isAbortError);
-const mockRawSqlCreateReturning = vi.mocked(rawSqlCreateReturning);
 
 // Shared mock transaction client
 function createMockTx() {
@@ -55,20 +49,16 @@ function createMockTx() {
     stagedIssueStatusHistory: {
       findMany: vi.fn().mockResolvedValue([]),
     },
-    jiraProject: {
-      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-    },
-    assignee: {
-      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    jiraConnection: {
+      update: vi.fn().mockResolvedValue({}),
     },
     syncRun: {
       findUnique: vi.fn(),
       findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
       update: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       create: vi.fn().mockResolvedValue({ id: "sr-1" }),
-    },
-    issueStatusHistory: {
-      createMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
   };
 }
@@ -80,7 +70,7 @@ beforeEach(() => {
   mockTx = createMockTx();
   // Default: $transaction passes the callback a mock tx
   vi.mocked(mockPrisma.$transaction).mockImplementation(
-    (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx),
+    ((fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)) as any,
   );
 });
 
@@ -245,32 +235,17 @@ describe("publishSyncRun", () => {
     ).rejects.toThrow("newer sync run");
   });
 
-  it("publishes staged data to live tables and sets SUCCEEDED", async () => {
+  it("updates activeSyncRunId pointer and sets SUCCEEDED", async () => {
     mockTx.syncRun.findUnique.mockResolvedValue(happySyncRun);
 
     const stagedProjects = [
       { id: "sp-1", jiraProjectId: "proj1", key: "PROJ", name: "Project" },
     ];
     const stagedAssignees = [
-      {
-        id: "sa-1",
-        jiraAccountId: "account1",
-        displayName: "Alice",
-        email: "a@t.com",
-        color: "#fff",
-      },
+      { id: "sa-1", jiraAccountId: "account1", displayName: "Alice", color: "#fff" },
     ];
     const stagedEpics = [
-      {
-        id: "se-1",
-        stagedProjectId: "sp-1",
-        jiraEpicId: "epic1",
-        key: "PROJ-1",
-        summary: "Epic",
-        status: "In Progress",
-        rank: 0,
-        jiraUpdatedAt: new Date("2026-01-01"),
-      },
+      { id: "se-1", stagedProjectId: "sp-1", jiraEpicId: "epic1", key: "PROJ-1", summary: "Epic", status: "In Progress" },
     ];
     const stagedIssues = [
       {
@@ -283,24 +258,6 @@ describe("publishSyncRun", () => {
         summary: "Task",
         status: "To Do",
         issueType: "Task",
-        priority: "Medium",
-        dueAt: null,
-        resolvedAt: null,
-        startedAt: null,
-        markerAt: null,
-        markerKind: "NONE",
-        jiraCreatedAt: new Date("2026-01-01"),
-        jiraUpdatedAt: new Date("2026-01-02"),
-        rawPayload: {},
-      },
-    ];
-    const stagedHistory = [
-      {
-        id: "sh-1",
-        stagedIssueId: "si-1",
-        fromStatus: "To Do",
-        toStatus: "In Progress",
-        changedAt: new Date("2026-01-03"),
       },
     ];
 
@@ -308,25 +265,17 @@ describe("publishSyncRun", () => {
     mockTx.stagedAssignee.findMany.mockResolvedValue(stagedAssignees as any);
     mockTx.stagedEpic.findMany.mockResolvedValue(stagedEpics as any);
     mockTx.stagedIssue.findMany.mockResolvedValue(stagedIssues as any);
-    mockTx.stagedIssueStatusHistory.findMany.mockResolvedValue(
-      stagedHistory as any,
-    );
-
-    // rawSqlCreateReturning returns published IDs
-    mockRawSqlCreateReturning.mockImplementation((() =>
-      Promise.resolve([{ id: "pub-1" }])) as any);
+    mockTx.stagedIssueStatusHistory.findMany.mockResolvedValue([]);
 
     await publishSyncRun({
       syncRunId: "sr-1",
       jiraConnectionId: "conn-1",
     });
 
-    // Should clean up staged data
-    expect(mockTx.stagedJiraProject.deleteMany).toHaveBeenCalledWith({
-      where: { syncRunId: "sr-1" },
-    });
-    expect(mockTx.stagedAssignee.deleteMany).toHaveBeenCalledWith({
-      where: { syncRunId: "sr-1" },
+    // Should set active pointer
+    expect(mockTx.jiraConnection.update).toHaveBeenCalledWith({
+      where: { id: "conn-1" },
+      data: { activeSyncRunId: "sr-1" },
     });
 
     // Should set status to SUCCEEDED
@@ -337,12 +286,6 @@ describe("publishSyncRun", () => {
         errorMessage: null,
       }),
     });
-
-    // Should create live data via rawSqlCreateReturning
-    expect(mockRawSqlCreateReturning).toHaveBeenCalled();
-
-    // Should create issue history
-    expect(mockTx.issueStatusHistory.createMany).toHaveBeenCalled();
   });
 
   it("throws on FK integrity violation: staged epic references missing project", async () => {
@@ -375,17 +318,49 @@ describe("publishSyncRun", () => {
   it("publishes with empty staged data (no issues, no epics)", async () => {
     mockTx.syncRun.findUnique.mockResolvedValue(happySyncRun);
 
-    // All staged tables empty (default mock returns [])
     await publishSyncRun({
       syncRunId: "sr-1",
       jiraConnectionId: "conn-1",
     });
 
+    expect(mockTx.jiraConnection.update).toHaveBeenCalledWith({
+      where: { id: "conn-1" },
+      data: { activeSyncRunId: "sr-1" },
+    });
     expect(mockTx.syncRun.update).toHaveBeenCalledWith({
       where: { id: "sr-1" },
       data: expect.objectContaining({ status: "SUCCEEDED" }),
     });
-    // rawSqlCreateReturning should not have been called for empty data
-    expect(mockRawSqlCreateReturning).not.toHaveBeenCalled();
+  });
+
+  it("cleans up old sync runs beyond the retention limit", async () => {
+    mockTx.syncRun.findUnique.mockResolvedValue(happySyncRun);
+
+    const oldRuns = [
+      { id: "sr-old-1" },
+      { id: "sr-old-2" },
+    ];
+    mockTx.syncRun.findMany.mockResolvedValue(oldRuns);
+
+    await publishSyncRun({
+      syncRunId: "sr-1",
+      jiraConnectionId: "conn-1",
+    });
+
+    expect(mockTx.syncRun.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ["sr-old-1", "sr-old-2"] } },
+    });
+  });
+
+  it("does not delete old sync runs when none exceed the limit", async () => {
+    mockTx.syncRun.findUnique.mockResolvedValue(happySyncRun);
+    mockTx.syncRun.findMany.mockResolvedValue([]);
+
+    await publishSyncRun({
+      syncRunId: "sr-1",
+      jiraConnectionId: "conn-1",
+    });
+
+    expect(mockTx.syncRun.deleteMany).not.toHaveBeenCalled();
   });
 });

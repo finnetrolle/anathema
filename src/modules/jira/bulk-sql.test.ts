@@ -59,7 +59,7 @@ describe("bulkUpsertReturning", () => {
     expect(sql).toContain("RETURNING");
     expect(sql).toContain('"id", "key"');
 
-    expect(params).toEqual(["p1", "PROJ", "Project 1"]);
+    expect(params).toEqual(["p1", "PROJ", "Project 1", expect.any(Date)]);
   });
 
   it("uses updateOverrides for custom SET expressions", async () => {
@@ -157,7 +157,7 @@ describe("bulkUpsertReturning", () => {
       string,
       ...unknown[],
     ];
-    expect(params).toEqual(["1", null]);
+    expect(params).toEqual(["1", null, expect.any(Date)]);
   });
 });
 
@@ -197,7 +197,7 @@ describe("rawSqlCreateReturning", () => {
     expect(sql).toContain('INSERT INTO "JiraProject"');
     expect(sql).toContain("RETURNING");
     expect(sql).not.toContain("ON CONFLICT");
-    expect(params).toEqual(["p1", "Proj"]);
+    expect(params).toEqual(["p1", "Proj", expect.any(Date)]);
   });
 
   it("uses tx.$queryRawUnsafe instead of prisma global", async () => {

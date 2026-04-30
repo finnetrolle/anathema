@@ -89,6 +89,8 @@ model JiraConnection {
   syncRuns            SyncRun[]
   dailyBriefRuns      DailyBriefRun[]
   riskSnapshots       RiskSnapshot[]
+  activeSyncRunId     String?              @unique
+  activeSyncRun       SyncRun?             @relation("ActiveSyncRun", fields: [activeSyncRunId], references: [id], onDelete: SetNull)
   riskThresholdConfig RiskThresholdConfig?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -128,6 +130,7 @@ model SyncRun {
   stagedAssignees    StagedAssignee[]
   stagedIssues       StagedIssue[]
   stagedIssueHistory StagedIssueStatusHistory[]
+  activeForConnection JiraConnection?           @relation("ActiveSyncRun")
   createdAt          DateTime                   @default(now())
 }
 
@@ -153,7 +156,6 @@ model StagedAssignee {
   syncRunId     String
   jiraAccountId String
   displayName   String
-  email         String?
   color         String
   syncRun       SyncRun       @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
   issues        StagedIssue[]
@@ -239,7 +241,6 @@ model Assignee {
   jiraConnectionId String?
   jiraAccountId    String
   displayName      String
-  email            String?
   color            String
   connection       JiraConnection? @relation(fields: [jiraConnectionId], references: [id], onDelete: Cascade)
   issues           Issue[]

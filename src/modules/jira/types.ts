@@ -77,6 +77,12 @@ export type JiraSearchResponse = {
   maxResults: number;
 };
 
+export type AssigneeRow = {
+  jiraAccountId: string;
+  displayName: string;
+  color: string;
+};
+
 export type JiraFieldDefinition = {
   id: string;
   name: string;

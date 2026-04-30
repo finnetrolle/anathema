@@ -14,7 +14,6 @@ import {
   deriveObservedPeople,
   deriveComponentName,
 } from "./raw-payload-helpers";
-import type { RawPayloadIssue } from "./raw-payload-helpers";
 
 // ── readRawPayload ──
 

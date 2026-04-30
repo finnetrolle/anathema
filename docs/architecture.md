@@ -44,8 +44,8 @@ Persistence layer for:
 - Jira connection metadata
 - tracked projects
 - epics
-- issues
-- assignees
+- issues (with minimized raw payloads — only fields used by the app are retained)
+- assignees (display name and color only; email is not stored)
 - sync runs
 - issue status history
 
@@ -91,9 +91,9 @@ intact during further iteration:
 2. The Jira adapter owns compatibility concerns such as Cloud vs Server,
    bearer vs basic auth, API v2 vs v3, and legacy epic-link detection instead
    of leaking them across the app.
-3. The persistence model stores both normalized timeline fields and the raw
-   Jira payload, which keeps reads fast today without giving up future
-   recalculation or enrichment options.
+3. The persistence model stores both normalized timeline fields and a minimized
+   raw Jira payload (allowlisted fields only), which keeps reads fast today
+   without storing unnecessary PII or giving up future recalculation options.
 4. The UI renders from internal timeline view models rather than Prisma or Jira
    records directly, which makes the board easier to evolve safely.
 5. `SyncRun` and `IssueStatusHistory` give the project a real operational trail

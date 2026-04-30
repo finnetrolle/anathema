@@ -7,6 +7,7 @@ import {
 } from "@/modules/jira/client";
 import { throwIfAborted } from "@/modules/jira/abort";
 import { bulkUpsertReturning } from "@/modules/jira/bulk-sql";
+import type { AssigneeRow } from "@/modules/jira/types";
 import { collectEntities } from "@/modules/jira/sync-entities";
 import {
   acquireJiraConnectionLock,
@@ -114,17 +115,16 @@ async function persistIssues(params: {
   }
 
   // B2: Assignees
-  const assigneeRows = [...collected.assigneeMap.values()].map((a) => ({
+  const assigneeRows: (AssigneeRow & { syncRunId: string })[] = [...collected.assigneeMap.values()].map((a) => ({
     syncRunId: params.syncRunId,
     jiraAccountId: a.jiraAccountId,
     displayName: a.displayName,
-    email: a.email,
     color: a.color,
   }));
 
   const assigneeResults = await bulkUpsertReturning({
     table: "StagedAssignee",
-    columns: ["syncRunId", "jiraAccountId", "displayName", "email", "color"],
+    columns: ["syncRunId", "jiraAccountId", "displayName", "color"],
     conflictColumns: ["syncRunId", "jiraAccountId"],
     returningColumns: ["id", "jiraAccountId"],
     rows: assigneeRows,

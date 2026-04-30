@@ -15,11 +15,12 @@ import {
   mergeEpicSeeds,
   collectEntities,
 } from "./sync-entities";
+import type { EpicSeed } from "./sync-entities";
 import type { JiraIssue } from "./types";
 
 // ── Minimal JiraIssue fixtures ──
 
-function makeIssue(overrides: Partial<JiraIssue> & { id: string; key: string }): JiraIssue {
+function makeIssue(overrides: { id: string; key: string; fields?: Partial<JiraIssue["fields"]>; changelog?: JiraIssue["changelog"] }): JiraIssue {
   return {
     id: overrides.id,
     key: overrides.key,
@@ -57,7 +58,6 @@ const taskIssue = makeIssue({
     assignee: {
       accountId: "user1",
       displayName: "Alice",
-      emailAddress: "alice@test.com",
     },
     created: "2026-01-10T00:00:00.000Z",
     updated: "2026-01-15T00:00:00.000Z",
@@ -66,6 +66,7 @@ const taskIssue = makeIssue({
   changelog: {
     histories: [
       {
+        id: "hist-1",
         created: "2026-01-12T00:00:00.000Z",
         items: [
           { field: "status", fromString: "To Do", toString: "In Progress" },
@@ -160,6 +161,53 @@ describe("buildRawPayload", () => {
     expect(payload.__anathemaMeta).toEqual({
       storyPointFieldIds: [],
       developmentFieldIds: [],
+    });
+  });
+
+  it("excludes extra Jira fields not on the allowlist", () => {
+    const issue = makeIssue({
+      id: "i1",
+      key: "X-1",
+      fields: {
+        summary: "Test",
+        issuetype: { name: "Task" },
+        status: { name: "To Do", statusCategory: { key: "new" } },
+        project: { id: "p1", key: "X", name: "Project X" },
+        assignee: { accountId: "a1", displayName: "Alice", emailAddress: "secret@test.com" },
+        components: [{ name: "Backend" }],
+        customfield_10001: "story-point-value",
+        customfield_20001: "dev-summary-value",
+        someOtherField: "should-not-appear",
+      } as unknown as Partial<JiraIssue["fields"]>,
+    });
+
+    const payload = buildRawPayload(issue, [], ["customfield_20001"]);
+
+    // Allowlisted fields are present
+    expect(payload.id).toBe("i1");
+    expect(payload.key).toBe("X-1");
+    expect(payload.fields?.summary).toBe("Test");
+    expect((payload.fields as Record<string, unknown>)["customfield_10001"]).toBe("story-point-value");
+    expect((payload.fields as Record<string, unknown>)["customfield_20001"]).toBe("dev-summary-value");
+
+    // Assignee is stripped to displayName only (no emailAddress)
+    const assignee = payload.fields?.assignee as Record<string, unknown>;
+    expect(assignee?.displayName).toBe("Alice");
+    expect(assignee?.emailAddress).toBeUndefined();
+
+    // Non-allowlisted top-level fields are excluded
+    expect((payload.fields as Record<string, unknown>)["someOtherField"]).toBeUndefined();
+  });
+
+  it("strips changelog items to only field/fromString/toString", () => {
+    const payload = buildRawPayload(taskIssue);
+    const history = payload.changelog?.histories?.[0];
+    expect(history?.id).toBe("hist-1");
+    expect(history?.created).toBe("2026-01-12T00:00:00.000Z");
+    expect(history?.items?.[0]).toEqual({
+      field: "status",
+      fromString: "To Do",
+      toString: "In Progress",
     });
   });
 });
@@ -371,7 +419,7 @@ describe("collectEntities", () => {
       [epicIssue, taskIssue],
       "sync-run-1",
       "UTC",
-      { startStatuses: ["In Progress"], endStatuses: ["Done"], inProgressStatusSet: new Set(["in progress"]), doneStatusSet: new Set(["done"]), usesFallback: false },
+      { inProgressStatuses: ["In Progress"], doneStatuses: ["Done"], inProgressStatusSet: new Set(["in progress"]), doneStatusSet: new Set(["done"]), usesFallback: false },
     );
 
     // Projects
@@ -398,7 +446,7 @@ describe("collectEntities", () => {
   });
 
   it("handles empty issues array", () => {
-    const result = collectEntities([], "sync-1", "UTC", { startStatuses: [], endStatuses: [], inProgressStatusSet: new Set(), doneStatusSet: new Set(), usesFallback: false });
+    const result = collectEntities([], "sync-1", "UTC", { inProgressStatuses: [], doneStatuses: [], inProgressStatusSet: new Set(), doneStatusSet: new Set(), usesFallback: false });
     expect(result.projectMap.size).toBe(0);
     expect(result.issueRecords).toHaveLength(0);
     expect(result.transitionRecords).toHaveLength(0);

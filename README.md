@@ -93,9 +93,29 @@ npm run check
 
 `npm run check` aggregates the local quality gates and is also the command used in CI.
 
+## Authentication
+
+The app uses opt-in Basic Auth. Set both `APP_BASIC_AUTH_USER` and `APP_BASIC_AUTH_PASSWORD` in `.env` to enable. When both are empty (default), auth is disabled and all routes are publicly accessible.
+
+When enabled, all app pages and API routes require Basic Auth except:
+
+- `/_next/*` — static assets
+- `/favicon.ico`
+- `/api/health` — health endpoint
+
+## Sync endpoint protection
+
+`POST /api/jira/sync` requires all of the following:
+
+- Authenticated caller (when Basic Auth is enabled)
+- `Content-Type: application/json`
+- Valid JSON body
+- `X-Anathema-Action: sync` custom header
+- `Origin` matching `APP_BASE_URL`
+
+This prevents CSRF and accidental trigger from plain HTML forms.
+
 ## Next implementation steps
 
-- connect Prisma client and sync runs to the `/api/jira/sync` route
-- store Jira changelog snapshots in the database
 - add filters for assignee, epic, status, and visible time range
 - expand the timeline UI with hover details and explicit empty states

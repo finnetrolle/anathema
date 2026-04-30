@@ -2,10 +2,12 @@ import { Prisma, SyncStatus } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
 import { isAbortError, throwIfAborted } from "@/modules/jira/abort";
-import { rawSqlCreateReturning } from "@/modules/jira/bulk-sql";
 type ResolveJiraRuntimeConfigReturn = Awaited<
   ReturnType<typeof import("@/modules/jira/client").resolveJiraRuntimeConfig>
 >;
+
+/** Number of completed sync runs to keep per connection (older ones are cleaned up). */
+const KEEP_SYNC_RUNS = 5;
 
 async function acquireJiraConnectionLock(
   tx: Prisma.TransactionClient,
@@ -115,66 +117,37 @@ async function publishSyncRun(params: {
       throw new Error("A newer sync run already exists for this Jira connection.");
     }
 
+    // FK integrity check — verify staged data references are consistent
     const stagedProjects = await tx.stagedJiraProject.findMany({
-      where: {
-        syncRunId: params.syncRunId,
-      },
-      orderBy: {
-        key: "asc",
-      },
+      where: { syncRunId: params.syncRunId },
+      select: { id: true },
     });
     const stagedAssignees = await tx.stagedAssignee.findMany({
-      where: {
-        syncRunId: params.syncRunId,
-      },
-      orderBy: {
-        jiraAccountId: "asc",
-      },
+      where: { syncRunId: params.syncRunId },
+      select: { id: true },
     });
     const stagedEpics = await tx.stagedEpic.findMany({
-      where: {
-        syncRunId: params.syncRunId,
-      },
-      orderBy: [
-        {
-          stagedProjectId: "asc",
-        },
-        {
-          key: "asc",
-        },
-      ],
+      where: { syncRunId: params.syncRunId },
+      select: { id: true, stagedProjectId: true },
     });
     const stagedIssues = await tx.stagedIssue.findMany({
-      where: {
-        syncRunId: params.syncRunId,
+      where: { syncRunId: params.syncRunId },
+      select: {
+        id: true,
+        stagedProjectId: true,
+        stagedEpicId: true,
+        stagedAssigneeId: true,
       },
-      orderBy: [
-        {
-          stagedProjectId: "asc",
-        },
-        {
-          key: "asc",
-        },
-      ],
     });
     const stagedIssueHistory = await tx.stagedIssueStatusHistory.findMany({
-      where: {
-        syncRunId: params.syncRunId,
-      },
-      orderBy: [
-        {
-          changedAt: "asc",
-        },
-        {
-          toStatus: "asc",
-        },
-      ],
+      where: { syncRunId: params.syncRunId },
+      select: { id: true, stagedIssueId: true },
     });
 
-    const stagedProjectIds = new Set(stagedProjects.map((project) => project.id));
-    const stagedAssigneeIds = new Set(stagedAssignees.map((assignee) => assignee.id));
-    const stagedEpicIds = new Set(stagedEpics.map((epic) => epic.id));
-    const stagedIssueIds = new Set(stagedIssues.map((issue) => issue.id));
+    const stagedProjectIds = new Set(stagedProjects.map((p) => p.id));
+    const stagedAssigneeIds = new Set(stagedAssignees.map((a) => a.id));
+    const stagedEpicIds = new Set(stagedEpics.map((e) => e.id));
+    const stagedIssueIds = new Set(stagedIssues.map((i) => i.id));
 
     for (const stagedEpic of stagedEpics) {
       if (!stagedProjectIds.has(stagedEpic.stagedProjectId)) {
@@ -186,15 +159,10 @@ async function publishSyncRun(params: {
       if (!stagedProjectIds.has(stagedIssue.stagedProjectId)) {
         throw new Error("Staged issue references a missing staged project.");
       }
-
       if (stagedIssue.stagedEpicId && !stagedEpicIds.has(stagedIssue.stagedEpicId)) {
         throw new Error("Staged issue references a missing staged epic.");
       }
-
-      if (
-        stagedIssue.stagedAssigneeId &&
-        !stagedAssigneeIds.has(stagedIssue.stagedAssigneeId)
-      ) {
+      if (stagedIssue.stagedAssigneeId && !stagedAssigneeIds.has(stagedIssue.stagedAssigneeId)) {
         throw new Error("Staged issue references a missing staged assignee.");
       }
     }
@@ -207,201 +175,40 @@ async function publishSyncRun(params: {
 
     throwIfAborted(params.signal);
 
-    await tx.jiraProject.deleteMany({
-      where: {
-        jiraConnectionId: params.jiraConnectionId,
-      },
-    });
-    await tx.assignee.deleteMany({
-      where: {
-        jiraConnectionId: params.jiraConnectionId,
-      },
+    // Active pointer switch — update JiraConnection to point to this sync run
+    await tx.jiraConnection.update({
+      where: { id: params.jiraConnectionId },
+      data: { activeSyncRunId: params.syncRunId },
     });
 
-    const publishedProjectIds = new Map<string, string>();
-
-    if (stagedProjects.length > 0) {
-      const projectRows = stagedProjects.map((sp) => ({
-        jiraConnectionId: params.jiraConnectionId,
-        jiraProjectId: sp.jiraProjectId,
-        key: sp.key,
-        name: sp.name,
-      }));
-
-      const projectResults = await rawSqlCreateReturning({
-        table: "JiraProject",
-        columns: ["jiraConnectionId", "jiraProjectId", "key", "name"],
-        rows: projectRows,
-        returningColumns: ["id"],
-        tx,
-        signal: params.signal,
-      });
-
-      for (let i = 0; i < stagedProjects.length; i++) {
-        publishedProjectIds.set(stagedProjects[i].id, projectResults[i].id as string);
-      }
-    }
-
-    const publishedAssigneeIds = new Map<string, string>();
-
-    if (stagedAssignees.length > 0) {
-      const assigneeRows = stagedAssignees.map((sa) => ({
-        jiraConnectionId: params.jiraConnectionId,
-        jiraAccountId: sa.jiraAccountId,
-        displayName: sa.displayName,
-        email: sa.email,
-        color: sa.color,
-      }));
-
-      const assigneeResults = await rawSqlCreateReturning({
-        table: "Assignee",
-        columns: ["jiraConnectionId", "jiraAccountId", "displayName", "email", "color"],
-        rows: assigneeRows,
-        returningColumns: ["id"],
-        tx,
-        signal: params.signal,
-      });
-
-      for (let i = 0; i < stagedAssignees.length; i++) {
-        publishedAssigneeIds.set(stagedAssignees[i].id, assigneeResults[i].id as string);
-      }
-    }
-
-    const publishedEpicIds = new Map<string, string>();
-
-    if (stagedEpics.length > 0) {
-      const epicRows = stagedEpics.map((se) => {
-        const jiraProjectId = publishedProjectIds.get(se.stagedProjectId);
-        if (!jiraProjectId) {
-          throw new Error("Unable to publish an epic without a project.");
-        }
-        return {
-          jiraProjectId,
-          jiraEpicId: se.jiraEpicId,
-          key: se.key,
-          summary: se.summary,
-          status: se.status,
-          rank: se.rank,
-          jiraUpdatedAt: se.jiraUpdatedAt,
-        };
-      });
-
-      const epicResults = await rawSqlCreateReturning({
-        table: "Epic",
-        columns: ["jiraProjectId", "jiraEpicId", "key", "summary", "status", "rank", "jiraUpdatedAt"],
-        rows: epicRows,
-        returningColumns: ["id"],
-        tx,
-        signal: params.signal,
-      });
-
-      for (let i = 0; i < stagedEpics.length; i++) {
-        publishedEpicIds.set(stagedEpics[i].id, epicResults[i].id as string);
-      }
-    }
-
-    const publishedIssueIds = new Map<string, string>();
-
-    if (stagedIssues.length > 0) {
-      const issueRows = stagedIssues.map((si) => {
-        const jiraProjectId = publishedProjectIds.get(si.stagedProjectId);
-        if (!jiraProjectId) {
-          throw new Error("Unable to publish an issue without a project.");
-        }
-        const epicId = si.stagedEpicId
-          ? publishedEpicIds.get(si.stagedEpicId)
-          : null;
-        if (si.stagedEpicId && !epicId) {
-          throw new Error("Unable to publish an issue with a missing epic.");
-        }
-        const assigneeId = si.stagedAssigneeId
-          ? publishedAssigneeIds.get(si.stagedAssigneeId)
-          : null;
-        if (si.stagedAssigneeId && !assigneeId) {
-          throw new Error("Unable to publish an issue with a missing assignee.");
-        }
-        return {
-          jiraProjectId,
-          epicId,
-          assigneeId,
-          jiraIssueId: si.jiraIssueId,
-          key: si.key,
-          summary: si.summary,
-          status: si.status,
-          issueType: si.issueType,
-          priority: si.priority,
-          dueAt: si.dueAt,
-          resolvedAt: si.resolvedAt,
-          startedAt: si.startedAt,
-          markerAt: si.markerAt,
-          markerKind: si.markerKind,
-          jiraCreatedAt: si.jiraCreatedAt,
-          jiraUpdatedAt: si.jiraUpdatedAt,
-          rawPayload: si.rawPayload,
-        };
-      });
-
-      const issueResults = await rawSqlCreateReturning({
-        table: "Issue",
-        columns: [
-          "jiraProjectId", "epicId", "assigneeId", "jiraIssueId", "key",
-          "summary", "status", "issueType", "priority", "dueAt", "resolvedAt",
-          "startedAt", "markerAt", "markerKind", "jiraCreatedAt", "jiraUpdatedAt",
-          "rawPayload",
-        ],
-        rows: issueRows,
-        returningColumns: ["id"],
-        tx,
-        signal: params.signal,
-        typeCasts: {
-          markerKind: '"TimelineMarkerKind"',
-          rawPayload: "jsonb",
-        },
-      });
-
-      for (let i = 0; i < stagedIssues.length; i++) {
-        publishedIssueIds.set(stagedIssues[i].id, issueResults[i].id as string);
-      }
-    }
-
-    if (stagedIssueHistory.length > 0) {
-      await tx.issueStatusHistory.createMany({
-        data: stagedIssueHistory.map((transition) => {
-          const issueId = publishedIssueIds.get(transition.stagedIssueId);
-
-          if (!issueId) {
-            throw new Error("Unable to publish issue history without an issue.");
-          }
-
-          return {
-            issueId,
-            syncRunId: params.syncRunId,
-            fromStatus: transition.fromStatus,
-            toStatus: transition.toStatus,
-            changedAt: transition.changedAt,
-          };
-        }),
-      });
-    }
-
-    await cleanupStagedSyncRun(tx, params.syncRunId);
-    await tx.assignee.deleteMany({
-      where: {
-        issues: {
-          none: {},
-        },
-      },
-    });
     await tx.syncRun.update({
-      where: {
-        id: params.syncRunId,
-      },
+      where: { id: params.syncRunId },
       data: {
         status: SyncStatus.SUCCEEDED,
         finishedAt: new Date(),
         errorMessage: null,
       },
     });
+
+    // Cleanup old sync runs — keep only the N most recent succeeded runs
+    const oldSyncRuns = await tx.syncRun.findMany({
+      where: {
+        jiraConnectionId: params.jiraConnectionId,
+        status: SyncStatus.SUCCEEDED,
+        id: { not: params.syncRunId },
+      },
+      select: { id: true },
+      orderBy: { startedAt: "desc" },
+      skip: KEEP_SYNC_RUNS - 1,
+    });
+
+    if (oldSyncRuns.length > 0) {
+      await tx.syncRun.deleteMany({
+        where: {
+          id: { in: oldSyncRuns.map((r) => r.id) },
+        },
+      });
+    }
   });
 }
 
