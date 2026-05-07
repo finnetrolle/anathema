@@ -9,6 +9,7 @@ import {
 export const DEFAULT_TIMELINE_TIMEZONE = "Europe/Moscow";
 
 const DATE_INPUT_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_DATE_FORMATTER_CACHE_SIZE = 64;
 const DATE_FORMATTER_CACHE = new Map<string, Intl.DateTimeFormat>();
 const DAY_KEY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
 const DAY_KEY_WEEKDAY_FORMATTER_CACHE = new Map<AppLocale, Intl.DateTimeFormat>();
@@ -28,6 +29,13 @@ function getDateFormatter(timezone: string, locale: AppLocale) {
     timeZone: normalizedTimezone,
   });
   DATE_FORMATTER_CACHE.set(cacheKey, formatter);
+
+  if (DATE_FORMATTER_CACHE.size > MAX_DATE_FORMATTER_CACHE_SIZE) {
+    const oldestKey = DATE_FORMATTER_CACHE.keys().next().value;
+    if (oldestKey !== undefined) {
+      DATE_FORMATTER_CACHE.delete(oldestKey);
+    }
+  }
 
   return formatter;
 }

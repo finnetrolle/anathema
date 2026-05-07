@@ -109,42 +109,32 @@ export function isDoneStatus(
   return normalizedStatus ? rules.doneStatusSet.has(normalizedStatus) : false;
 }
 
-export function deriveStartedAt(
+function scanHistories(
   issue: JiraIssue,
   rules: JiraWorkflowRules = getDefaultWorkflowRules(),
-) {
+): { startAt: string | null; doneAt: string | null } {
   const histories = issue.changelog?.histories ?? [];
   const sortedHistories = [...histories].sort((left, right) =>
     left.created.localeCompare(right.created),
   );
 
-  for (const history of sortedHistories) {
-    const movedIntoProgress = history.items.some(
-      (item) =>
-        item.field === "status" &&
-        item.toString &&
-        isInProgressStatus(item.toString, rules),
-    );
-
-    if (movedIntoProgress) {
-      return history.created;
-    }
-  }
-
-  return null;
-}
-
-function deriveDoneAt(
-  issue: JiraIssue,
-  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
-) {
-  const histories = issue.changelog?.histories ?? [];
-  const sortedHistories = [...histories].sort((left, right) =>
-    left.created.localeCompare(right.created),
-  );
+  let startAt: string | null = null;
   let doneAt: string | null = null;
 
   for (const history of sortedHistories) {
+    if (startAt === null) {
+      const movedIntoProgress = history.items.some(
+        (item) =>
+          item.field === "status" &&
+          item.toString &&
+          isInProgressStatus(item.toString, rules),
+      );
+
+      if (movedIntoProgress) {
+        startAt = history.created;
+      }
+    }
+
     const movedIntoDone = history.items.some(
       (item) =>
         item.field === "status" &&
@@ -158,12 +148,27 @@ function deriveDoneAt(
     }
   }
 
-  return doneAt;
+  return { startAt, doneAt };
+}
+
+export function deriveStartedAt(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+) {
+  return scanHistories(issue, rules).startAt;
+}
+
+function deriveDoneAt(
+  issue: JiraIssue,
+  rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+) {
+  return scanHistories(issue, rules).doneAt;
 }
 
 export function deriveMarker(
   issue: JiraIssue,
   rules: JiraWorkflowRules = getDefaultWorkflowRules(),
+  scannedDoneAt?: string | null,
 ): {
   markerAt: string | null;
   markerKind: TimelineMarkerKind;
@@ -178,11 +183,9 @@ export function deriveMarker(
   }
 
   if (isDoneStatus(issue.fields.status?.name, rules, statusCategoryKey)) {
+    const doneAt = scannedDoneAt ?? deriveDoneAt(issue, rules);
     return {
-      // Prefer the real completion transition when possible. If we cannot infer
-      // it, use the latest observed Jira timestamp so recently completed work
-      // stays visible until workflow rules are configured more precisely.
-      markerAt: deriveDoneAt(issue, rules) ?? issue.fields.updated ?? issue.fields.created ?? null,
+      markerAt: doneAt ?? issue.fields.updated ?? issue.fields.created ?? null,
       markerKind: "DONE" as const,
     };
   }
@@ -204,10 +207,11 @@ export function deriveTimelineFields(
   issue: JiraIssue,
   rules: JiraWorkflowRules = getDefaultWorkflowRules(),
 ) {
-  const marker = deriveMarker(issue, rules);
+  const { startAt, doneAt } = scanHistories(issue, rules);
+  const marker = deriveMarker(issue, rules, doneAt);
 
   return {
-    startAt: deriveStartedAt(issue, rules),
+    startAt,
     markerAt: marker.markerAt,
     markerKind: marker.markerKind,
   };

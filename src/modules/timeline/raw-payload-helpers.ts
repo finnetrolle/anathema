@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { DEFAULT_APP_LOCALE, type AppLocale } from "@/modules/i18n/config";
+import { trimTrailingSlash } from "@/modules/shared/strings";
 
 export type RawPayloadUser = {
   displayName?: string | null;
@@ -52,7 +53,7 @@ export function buildIssueUrl(baseUrl: string | null | undefined, key: string) {
     return null;
   }
 
-  return `${baseUrl.replace(/\/$/, "")}/browse/${key}`;
+  return `${trimTrailingSlash(baseUrl)}/browse/${key}`;
 }
 
 export function splitComponentNames(value: string) {
@@ -195,6 +196,7 @@ export function deriveObservedPeople(
   rawPayload: Prisma.JsonValue | null,
   currentAssigneeName?: string | null,
   locale: AppLocale = DEFAULT_APP_LOCALE,
+  precomputedHistory?: string[],
 ) {
   const payload = readRawPayload(rawPayload);
   const observedPeople: string[] = [];
@@ -211,11 +213,13 @@ export function deriveObservedPeople(
     observedPeople.push(normalized);
   };
 
-  for (const assigneeName of deriveAssigneeHistory(
+  const history = precomputedHistory ?? deriveAssigneeHistory(
     rawPayload,
     currentAssigneeName,
     locale,
-  )) {
+  );
+
+  for (const assigneeName of history) {
     addPerson(assigneeName);
   }
 

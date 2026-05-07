@@ -2,6 +2,7 @@ import { SyncStatus } from "@prisma/client";
 
 import { prisma } from "@/modules/db/prisma";
 import {
+  type JiraRuntimeConfig,
   resolveJiraRuntimeConfig,
   searchJiraIssuesPage,
 } from "@/modules/jira/client";
@@ -11,6 +12,7 @@ import type { AssigneeRow } from "@/modules/jira/types";
 import { collectEntities } from "@/modules/jira/sync-entities";
 import {
   acquireJiraConnectionLock,
+  cleanupStagedSyncRun,
   upsertJiraConnection,
   publishSyncRun,
   failSyncRun,
@@ -32,6 +34,7 @@ type RunJiraSyncInput = {
 type RunJiraSyncChunkInput = RunJiraSyncInput & {
   syncRunId?: string;
   startAt?: number;
+  runtime?: JiraRuntimeConfig;
 };
 
 type SyncCounts = {
@@ -265,13 +268,14 @@ export async function runJiraSyncChunk({
   startAt = 0,
   maxResults = DEFAULT_JIRA_SYNC_PAGE_SIZE,
   signal,
+  runtime: precomputedRuntime,
 }: RunJiraSyncChunkInput): Promise<RunJiraSyncChunkResult> {
   if (startAt > 0 && !syncRunId) {
     throw new Error("Chunk continuation requires syncRunId.");
   }
 
   throwIfAborted(signal);
-  const runtime = await resolveJiraRuntimeConfig(signal);
+  const runtime = precomputedRuntime ?? await resolveJiraRuntimeConfig(signal);
   const requestedJql = jql ?? runtime.defaultJql;
 
   throwIfAborted(signal);
@@ -316,6 +320,8 @@ export async function runJiraSyncChunk({
     const syncRun = await prisma.$transaction(async (tx) => {
       await acquireJiraConnectionLock(tx, connection.id);
 
+      const STALE_SYNC_RUN_THRESHOLD_MS = 10 * 60 * 1000;
+
       const existingSyncRun = await tx.syncRun.findFirst({
         where: {
           jiraConnectionId: connection.id,
@@ -323,11 +329,26 @@ export async function runJiraSyncChunk({
         },
         select: {
           id: true,
+          startedAt: true,
         },
+        orderBy: { startedAt: "desc" },
       });
 
       if (existingSyncRun) {
-        throw new Error("Another sync run is already active for this Jira connection.");
+        const age = Date.now() - existingSyncRun.startedAt.getTime();
+        if (age < STALE_SYNC_RUN_THRESHOLD_MS) {
+          throw new Error("Another sync run is already active for this Jira connection.");
+        }
+
+        await tx.syncRun.update({
+          where: { id: existingSyncRun.id },
+          data: {
+            status: SyncStatus.FAILED,
+            finishedAt: new Date(),
+            errorMessage: "Sync run timed out and was superseded.",
+          },
+        });
+        await cleanupStagedSyncRun(tx, existingSyncRun.id);
       }
 
       return tx.syncRun.create({
@@ -416,6 +437,7 @@ export async function runJiraSync({
   maxResults = DEFAULT_JIRA_SYNC_PAGE_SIZE,
   signal,
 }: RunJiraSyncInput) {
+  const runtime = await resolveJiraRuntimeConfig(signal);
   const projectKeys = new Set<string>();
   const epicKeys = new Set<string>();
   const assigneeIds = new Set<string>();
@@ -430,6 +452,7 @@ export async function runJiraSync({
       startAt: issuesFetched,
       maxResults,
       signal,
+      runtime,
     });
 
     syncRunId = chunk.syncRunId;

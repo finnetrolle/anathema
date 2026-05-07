@@ -83,6 +83,53 @@ describe("bulkUpsertReturning", () => {
     expect(sql).not.toContain('"summary" = EXCLUDED."summary"');
   });
 
+  it("rejects updateOverrides with SQL injection (semicolon)", async () => {
+    await expect(
+      bulkUpsertReturning({
+        table: "Issue",
+        columns: ["id", "key"],
+        conflictColumns: ["id"],
+        returningColumns: ["id"],
+        rows: [{ id: "1", key: "K" }],
+        updateOverrides: {
+          key: "EXCLUDED.key; DROP TABLE Issue; --",
+        },
+      }),
+    ).rejects.toThrow('contains disallowed SQL');
+  });
+
+  it("rejects updateOverrides with subquery", async () => {
+    await expect(
+      bulkUpsertReturning({
+        table: "Issue",
+        columns: ["id", "key"],
+        conflictColumns: ["id"],
+        returningColumns: ["id"],
+        rows: [{ id: "1", key: "K" }],
+        updateOverrides: {
+          key: "(SELECT 1)",
+        },
+      }),
+    ).rejects.toThrow('contains disallowed SQL');
+  });
+
+  it("allows safe updateOverrides with EXCLUDED and operators", async () => {
+    mockQueryRawUnsafe.mockResolvedValue([]);
+
+    await expect(
+      bulkUpsertReturning({
+        table: "Issue",
+        columns: ["id", "key"],
+        conflictColumns: ["id"],
+        returningColumns: ["id"],
+        rows: [{ id: "1", key: "K" }],
+        updateOverrides: {
+          key: "EXCLUDED.key",
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("applies typeCasts for specified columns", async () => {
     mockQueryRawUnsafe.mockResolvedValue([]);
 

@@ -8,6 +8,12 @@ import {
   SYNC_ACTION_HEADER,
   SYNC_ACTION_VALUE,
 } from "@/modules/auth/sync-action";
+import {
+  checkRateLimit,
+  checkConcurrentSync,
+  acquireSyncSlot,
+  releaseSyncSlot,
+} from "@/modules/auth/rate-limit";
 
 const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -51,18 +57,48 @@ export async function POST(request: Request) {
 
   const signal = combineSignals(request.signal, SYNC_TIMEOUT_MS);
 
-  try {
-    const requestedJql = body.jql?.trim() || undefined;
-    const startAt =
-      typeof body.startAt === "number" && Number.isFinite(body.startAt)
-        ? Math.max(0, Math.trunc(body.startAt))
-        : 0;
-    const isChunkRequest = body.chunked || body.syncRunId || startAt > 0;
+  const startAt =
+    typeof body.startAt === "number" && Number.isFinite(body.startAt)
+      ? Math.max(0, Math.trunc(body.startAt))
+      : 0;
+  const isChunkRequest = body.chunked || body.syncRunId || startAt > 0;
 
-    if (startAt > 0 && !body.syncRunId) {
-      return reject(400, "Chunk continuation requires syncRunId.");
+  if (startAt > 0 && !body.syncRunId) {
+    return reject(400, "Chunk continuation requires syncRunId.");
+  }
+
+  if (!isChunkRequest) {
+    const clientKey =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      request.headers.get("x-real-ip") ??
+      "unknown";
+
+    const rateResult = checkRateLimit(clientKey);
+    if (!rateResult.allowed) {
+      return Response.json(
+        { ok: false, message: rateResult.reason },
+        {
+          status: 429,
+          headers: rateResult.retryAfterMs
+            ? { "Retry-After": String(Math.ceil(rateResult.retryAfterMs / 1000)) }
+            : {},
+        },
+      );
     }
 
+    const syncCheck = checkConcurrentSync();
+    if (!syncCheck.allowed) {
+      return Response.json(
+        { ok: false, message: syncCheck.reason },
+        { status: 429 },
+      );
+    }
+    acquireSyncSlot();
+  }
+
+  const requestedJql = body.jql?.trim() || undefined;
+
+  try {
     const summary = isChunkRequest
       ? await runJiraSyncChunk({
           jql: requestedJql,
@@ -90,5 +126,9 @@ export async function POST(request: Request) {
       { ok: false, message },
       { status: isCancelled ? 499 : 500 },
     );
+  } finally {
+    if (!isChunkRequest) {
+      releaseSyncSlot();
+    }
   }
 }

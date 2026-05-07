@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 
 import { getAppLocale } from "@/modules/i18n/server";
@@ -26,11 +27,12 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const locale = await getAppLocale();
+  const nonce = (await headers()).get("x-csp-nonce") ?? undefined;
 
   return (
     <html lang={locale}>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body>{children}</body>
     </html>

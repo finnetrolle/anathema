@@ -1,11 +1,9 @@
 import { DEFAULT_APP_LOCALE, type AppLocale } from "@/modules/i18n/config";
 import { prisma } from "@/modules/db/prisma";
 import {
-  deriveTimelineFields,
   isDoneStatus,
   isInProgressStatus,
 } from "@/modules/jira/derive";
-import type { JiraIssue } from "@/modules/jira/types";
 import { resolveWorkflowRules } from "@/modules/jira/workflow-rules";
 import {
   buildTimelineModel,
@@ -21,11 +19,12 @@ import {
   resolveTimelineTimezones,
 } from "@/modules/timeline/load-dashboard-helpers";
 import {
+  isValidDayKey,
   normalizeTimelineTimezone,
   normalizeTimelineTimezones,
 } from "@/modules/timeline/date-helpers";
+import { trimTrailingSlash } from "@/modules/shared/strings";
 import {
-  buildIssueUrl,
   deriveAssigneeHistory,
   deriveAuthorName,
   deriveComponentName,
@@ -35,8 +34,6 @@ import {
   deriveObservedPeople,
   deriveStatusCategoryKey,
   getTimelinePlaceholderCopy,
-  parseDerivedDate,
-  readRawPayload,
 } from "@/modules/timeline/dashboard-enrichment";
 import {
   EMPTY_TIMELINE_ISSUE_RISK,
@@ -76,74 +73,16 @@ type TimelineDashboard = {
   };
 };
 
-function buildIssueForTimelineDerivation(
-  issue: PersistedTimelineIssue,
-): JiraIssue | null {
-  const payload = readRawPayload(issue.rawPayload);
-
-  if (!payload?.fields) {
-    return null;
-  }
-
-  const histories: NonNullable<JiraIssue["changelog"]>["histories"] = [];
-
-  for (const [historyIndex, history] of (payload.changelog?.histories ?? []).entries()) {
-    if (typeof history.created !== "string") {
-      continue;
-    }
-
-    const items =
-      history.items
-        ?.filter(
-          (
-            item,
-          ): item is {
-            field: string;
-            fromString?: string | null;
-            toString?: string | null;
-          } => typeof item.field === "string",
-        )
-        .map((item) => ({
-          field: item.field,
-          fromString: item.fromString ?? null,
-          toString: item.toString ?? null,
-        })) ?? [];
-
-    histories.push({
-      id: history.id ?? `${issue.key}:history:${historyIndex}`,
-      created: history.created,
-      items,
-    });
-  }
-
-  return {
-    id: issue.key,
-    key: issue.key,
-    fields: payload.fields as JiraIssue["fields"],
-    changelog: {
-      histories,
-    },
-  };
-}
-
 function deriveIssueTimelineState(
   issue: PersistedTimelineIssue,
   workflowRules: ReturnType<typeof resolveWorkflowRules>,
 ): DerivedPersistedTimelineIssue["derivedTimeline"] {
   const statusCategoryKey = deriveStatusCategoryKey(issue.rawPayload);
-  const issueForDerivation = buildIssueForTimelineDerivation(issue);
-  const derivedTimelineFields = issueForDerivation
-    ? deriveTimelineFields(issueForDerivation, workflowRules)
-    : null;
-  const markerKind = derivedTimelineFields?.markerKind ?? issue.markerKind;
+  const markerKind = issue.markerKind;
 
   return {
-    startAt: derivedTimelineFields
-      ? parseDerivedDate(derivedTimelineFields.startAt)
-      : issue.startedAt,
-    markerAt: derivedTimelineFields
-      ? parseDerivedDate(derivedTimelineFields.markerAt)
-      : issue.markerAt,
+    startAt: issue.startedAt,
+    markerAt: issue.markerAt,
     markerKind,
     isCompleted: isDoneStatus(issue.status, workflowRules, statusCategoryKey),
     isMissingDueDate:
@@ -169,6 +108,7 @@ function toTimelineEpics(
   }
 
   const groupedEpics = new Map<string, TimelineEpic>();
+  const trimmedBaseUrlCache = new Map<string, string | null>();
 
   for (const issue of issues) {
     const issueRisk = riskByIssueId.get(issue.id) ?? EMPTY_TIMELINE_ISSUE_RISK;
@@ -183,11 +123,17 @@ function toTimelineEpics(
     const epicId = issue.epic?.id ?? "ungrouped";
     const groupKey = `${componentName}::${epicId}`;
     const existingEpic = groupedEpics.get(groupKey);
+    const rawBaseUrl = issue.project.connection.baseUrl;
+    let trimmedBaseUrl = trimmedBaseUrlCache.get(rawBaseUrl ?? "");
+    if (trimmedBaseUrl === undefined) {
+      trimmedBaseUrl = rawBaseUrl ? trimTrailingSlash(rawBaseUrl) : null;
+      trimmedBaseUrlCache.set(rawBaseUrl ?? "", trimmedBaseUrl);
+    }
     const timelineIssue = {
       id: issue.id,
       key: issue.key,
       summary: issue.summary,
-      issueUrl: buildIssueUrl(issue.project.connection.baseUrl, issue.key),
+      issueUrl: trimmedBaseUrl ? `${trimmedBaseUrl}/browse/${issue.key}` : null,
       timezone: normalizeTimelineTimezone(issue.project.connection.timezone),
       componentName,
       epicId,
@@ -203,7 +149,7 @@ function toTimelineEpics(
       resolvedAt: issue.resolvedAt?.toISOString() ?? null,
       estimateHours: deriveEstimateHours(issue.rawPayload),
       estimateStoryPoints: deriveEstimateStoryPoints(issue.rawPayload),
-      observedPeople: deriveObservedPeople(issue.rawPayload, assigneeName, locale),
+      observedPeople: deriveObservedPeople(issue.rawPayload, assigneeName, locale, assigneeHistory),
       assigneeHistory,
       authorName,
       markerAt: issue.derivedTimeline.markerAt?.toISOString() ?? null,
@@ -250,8 +196,8 @@ type LoadTimelineDashboardInput = {
   locale?: AppLocale;
 };
 
-function normalizeDateInput(value?: string) {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+function normalizeDateInput(value?: string): string {
+  return value && isValidDayKey(value) ? value : "";
 }
 
 function buildFallbackRangeInputs(

@@ -1,3 +1,5 @@
+import { toRecord } from "@/modules/timeline/raw-payload-helpers";
+
 const DEFAULT_IN_PROGRESS_STATUSES = [
   "In Progress",
   "Development",
@@ -30,10 +32,6 @@ export type JiraWorkflowRules = JiraWorkflowRulesConfig & {
 };
 
 const warnedFallbackConnections = new Set<string>();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 export function normalizeWorkflowStatusName(status?: string | null) {
   const normalized = status?.trim();
@@ -146,7 +144,7 @@ export function resolveWorkflowRules(
   rawRules: unknown,
   options: ResolveWorkflowRulesOptions = {},
 ) {
-  const rulesRecord = isRecord(rawRules) ? rawRules : null;
+  const rulesRecord = toRecord(rawRules);
   const inProgressStatuses = normalizeStatusList(
     rulesRecord?.inProgressStatuses,
   );

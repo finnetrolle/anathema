@@ -20,9 +20,7 @@ type HomePageProps = {
   }>;
 };
 
-function firstQueryValue(value?: string | string[]) {
-  return Array.isArray(value) ? value[0] : value;
-}
+import { firstQueryValue } from "@/modules/http/query-helpers";
 
 export default async function HomePage({ searchParams }: HomePageProps) {
   noStore();

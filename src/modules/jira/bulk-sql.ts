@@ -8,6 +8,24 @@ import { throwIfAborted } from "@/modules/jira/abort";
 const BULK_CHUNK_SIZE = 500;
 
 /**
+ * Validates that updateOverride expressions are safe SQL fragments.
+ * Prevents injection of arbitrary SQL through updateOverrides by blocking
+ * semicolons, comments, and subqueries while allowing EXCLUDED references,
+ * string literals, and basic operators.
+ */
+const SAFE_OVERRIDE_RE = /^(?!.*(?:;|--|\/\*|SELECT\s|INSERT\s|UPDATE\s|DELETE\s|DROP\s|CREATE\s|ALTER\s|EXEC\s|EXECUTE\s)).+$/i;
+
+function validateUpdateOverrides(overrides: Record<string, string>): void {
+  for (const [col, expr] of Object.entries(overrides)) {
+    if (!SAFE_OVERRIDE_RE.test(expr)) {
+      throw new Error(
+        `updateOverrides["${col}"] contains disallowed SQL: "${expr}"`,
+      );
+    }
+  }
+}
+
+/**
  * Prisma @default(cuid()) and @updatedAt are client-side only.
  * Raw SQL bypasses Prisma, so we must inject these values ourselves.
  */
@@ -64,6 +82,7 @@ export async function bulkUpsertReturning(params: {
     chunkSize = BULK_CHUNK_SIZE,
   } = params;
   if (rows.length === 0) return [];
+  if (updateOverrides) validateUpdateOverrides(updateOverrides);
 
   const { columns: effectiveColumns, rows: effectiveRows } = injectMissingDefaults(columns, rows, { injectUpdatedAt: params.injectUpdatedAt });
 

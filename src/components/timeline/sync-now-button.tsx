@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { SYNC_ACTION_HEADER, SYNC_ACTION_VALUE } from "@/modules/auth/sync-action";
+import { isAbortError } from "@/modules/jira/abort";
 import {
   useEffect,
   useId,
@@ -136,13 +137,6 @@ const COPY: Record<
     syncFailed: "Unable to complete the sync.",
   },
 };
-
-function isAbortError(error: unknown) {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError")
-  );
-}
 
 export function SyncNowButton({
   initialJql = "",

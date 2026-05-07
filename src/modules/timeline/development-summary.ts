@@ -144,17 +144,19 @@ export function derivePullRequestStatusFromCounters(record: Record<string, unkno
 }
 
 export function derivePullRequestCount(record: Record<string, unknown>) {
+  const details = toRecord(record.details);
+
   return (
     readCountLike(record.count) ??
     readCountLike(record.total) ??
     readCountLike(record.stateCount) ??
-    readCountLike(toRecord(record.details)?.total) ??
+    readCountLike(details?.total) ??
     (readCountLike(record.open) ?? 0) +
       (readCountLike(record.merged) ?? 0) +
       (readCountLike(record.declined) ?? 0) +
-      (readCountLike(toRecord(record.details)?.openCount) ?? 0) +
-      (readCountLike(toRecord(record.details)?.mergedCount) ?? 0) +
-      (readCountLike(toRecord(record.details)?.declinedCount) ?? 0)
+      (readCountLike(details?.openCount) ?? 0) +
+      (readCountLike(details?.mergedCount) ?? 0) +
+      (readCountLike(details?.declinedCount) ?? 0)
   );
 }
 
@@ -397,11 +399,13 @@ export function deriveDevelopmentSummary(
   }
 
   const queue: unknown[] = [rootValue];
+  let head = 0;
   const visitedObjects = new Set<object>();
   let summary = EMPTY_DEVELOPMENT_SUMMARY;
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
 
     if (!current) {
       continue;

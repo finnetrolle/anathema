@@ -139,9 +139,25 @@ describe("parseJiraDate", () => {
 // ── toPrismaJson ──
 
 describe("toPrismaJson", () => {
-  it("round-trips an object", () => {
+  it("round-trips a plain object", () => {
     const obj = { a: 1, b: "hello" };
     expect(toPrismaJson(obj)).toEqual(obj);
+  });
+
+  it("strips undefined values", () => {
+    expect(toPrismaJson({ a: 1, b: undefined })).toEqual({ a: 1 });
+  });
+
+  it("strips nested undefined values", () => {
+    expect(toPrismaJson({ a: { b: undefined, c: 2 } })).toEqual({ a: { c: 2 } });
+  });
+
+  it("handles arrays", () => {
+    expect(toPrismaJson([1, null, "x"])).toEqual([1, null, "x"]);
+  });
+
+  it("returns null for null input", () => {
+    expect(toPrismaJson(null)).toBeNull();
   });
 });
 

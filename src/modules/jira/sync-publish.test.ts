@@ -5,6 +5,21 @@ vi.mock("@/modules/db/prisma", () => ({
     jiraConnection: {
       upsert: vi.fn(),
     },
+    stagedJiraProject: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    stagedAssignee: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    stagedEpic: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    stagedIssue: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    stagedIssueStatusHistory: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $transaction: vi.fn((fn) => fn(mockTx)),
   },
 }));
@@ -14,8 +29,13 @@ vi.mock("@/modules/jira/abort", () => ({
   isAbortError: vi.fn((e: unknown) => e instanceof DOMException && e.name === "AbortError"),
 }));
 
+vi.mock("@/modules/jira/bulk-sql", () => ({
+  rawSqlCreateReturning: vi.fn(),
+}));
+
 import { prisma } from "@/modules/db/prisma";
 import { throwIfAborted, isAbortError } from "@/modules/jira/abort";
+import { rawSqlCreateReturning } from "@/modules/jira/bulk-sql";
 import {
   acquireJiraConnectionLock,
   cleanupStagedSyncRun,
@@ -27,6 +47,7 @@ import {
 const mockPrisma = vi.mocked(prisma);
 const mockThrowIfAborted = vi.mocked(throwIfAborted);
 const mockIsAbortError = vi.mocked(isAbortError);
+const mockRawSqlCreateReturning = vi.mocked(rawSqlCreateReturning);
 
 // Shared mock transaction client
 function createMockTx() {
@@ -41,13 +62,22 @@ function createMockTx() {
       findMany: vi.fn().mockResolvedValue([]),
     },
     stagedEpic: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       findMany: vi.fn().mockResolvedValue([]),
     },
     stagedIssue: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       findMany: vi.fn().mockResolvedValue([]),
     },
     stagedIssueStatusHistory: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       findMany: vi.fn().mockResolvedValue([]),
+    },
+    jiraProject: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    assignee: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     jiraConnection: {
       update: vi.fn().mockResolvedValue({}),
@@ -72,6 +102,13 @@ beforeEach(() => {
   vi.mocked(mockPrisma.$transaction).mockImplementation(
     ((fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)) as any,
   );
+  // Staged models are now read outside transaction via prisma directly
+  vi.mocked(mockPrisma.stagedJiraProject.findMany).mockResolvedValue([] as any);
+  vi.mocked(mockPrisma.stagedAssignee.findMany).mockResolvedValue([] as any);
+  vi.mocked(mockPrisma.stagedEpic.findMany).mockResolvedValue([] as any);
+  vi.mocked(mockPrisma.stagedIssue.findMany).mockResolvedValue([] as any);
+  vi.mocked(mockPrisma.stagedIssueStatusHistory.findMany).mockResolvedValue([] as any);
+  mockRawSqlCreateReturning.mockResolvedValue([]);
 });
 
 // ── acquireJiraConnectionLock ──
@@ -258,19 +295,83 @@ describe("publishSyncRun", () => {
         summary: "Task",
         status: "To Do",
         issueType: "Task",
+        priority: null,
+        dueAt: null,
+        resolvedAt: null,
+        startedAt: null,
+        markerAt: null,
+        markerKind: "NONE",
+        jiraCreatedAt: null,
+        jiraUpdatedAt: null,
+        rawPayload: null,
+      },
+    ];
+    const stagedIssueHistory = [
+      {
+        stagedIssueId: "si-1",
+        fromStatus: "To Do",
+        toStatus: "In Progress",
+        changedAt: new Date("2026-01-02T12:00:00.000Z"),
       },
     ];
 
-    mockTx.stagedJiraProject.findMany.mockResolvedValue(stagedProjects as any);
-    mockTx.stagedAssignee.findMany.mockResolvedValue(stagedAssignees as any);
-    mockTx.stagedEpic.findMany.mockResolvedValue(stagedEpics as any);
-    mockTx.stagedIssue.findMany.mockResolvedValue(stagedIssues as any);
-    mockTx.stagedIssueStatusHistory.findMany.mockResolvedValue([]);
+    vi.mocked(mockPrisma.stagedJiraProject.findMany).mockResolvedValue(stagedProjects as any);
+    vi.mocked(mockPrisma.stagedAssignee.findMany).mockResolvedValue(stagedAssignees as any);
+    vi.mocked(mockPrisma.stagedEpic.findMany).mockResolvedValue(stagedEpics as any);
+    vi.mocked(mockPrisma.stagedIssue.findMany).mockResolvedValue(stagedIssues as any);
+    vi.mocked(mockPrisma.stagedIssueStatusHistory.findMany).mockResolvedValue(stagedIssueHistory as any);
+    mockRawSqlCreateReturning.mockImplementation(async ({ table, rows }) => {
+      if (table === "JiraProject") {
+        return (rows as Array<Record<string, unknown>>).map((row) => ({
+          id: "jp-1",
+          jiraProjectId: row.jiraProjectId,
+        }));
+      }
+
+      if (table === "Assignee") {
+        return (rows as Array<Record<string, unknown>>).map((row) => ({
+          id: "a-1",
+          jiraAccountId: row.jiraAccountId,
+        }));
+      }
+
+      if (table === "Epic") {
+        return (rows as Array<Record<string, unknown>>).map((row) => ({
+          id: "e-1",
+          jiraProjectId: row.jiraProjectId,
+          jiraEpicId: row.jiraEpicId,
+        }));
+      }
+
+      if (table === "Issue") {
+        return (rows as Array<Record<string, unknown>>).map((row) => ({
+          id: "i-1",
+          jiraProjectId: row.jiraProjectId,
+          jiraIssueId: row.jiraIssueId,
+        }));
+      }
+
+      return [{ id: "ish-1" }];
+    });
 
     await publishSyncRun({
       syncRunId: "sr-1",
       jiraConnectionId: "conn-1",
     });
+
+    expect(mockTx.jiraProject.deleteMany).toHaveBeenCalledWith({
+      where: { jiraConnectionId: "conn-1" },
+    });
+    expect(mockTx.assignee.deleteMany).toHaveBeenCalledWith({
+      where: { jiraConnectionId: "conn-1" },
+    });
+    expect(mockTx.stagedJiraProject.deleteMany).toHaveBeenCalledWith({
+      where: { syncRunId: "sr-1" },
+    });
+    expect(mockTx.stagedAssignee.deleteMany).toHaveBeenCalledWith({
+      where: { syncRunId: "sr-1" },
+    });
+    expect(mockRawSqlCreateReturning).toHaveBeenCalledTimes(5);
 
     // Should set active pointer
     expect(mockTx.jiraConnection.update).toHaveBeenCalledWith({
@@ -302,13 +403,13 @@ describe("publishSyncRun", () => {
       },
     ];
 
-    mockTx.stagedJiraProject.findMany.mockResolvedValue([
+    vi.mocked(mockPrisma.stagedJiraProject.findMany).mockResolvedValue([
       { id: "sp-1", jiraProjectId: "proj1", key: "PROJ", name: "Project" },
     ] as any);
-    mockTx.stagedEpic.findMany.mockResolvedValue(stagedEpics as any);
-    mockTx.stagedAssignee.findMany.mockResolvedValue([]);
-    mockTx.stagedIssue.findMany.mockResolvedValue([]);
-    mockTx.stagedIssueStatusHistory.findMany.mockResolvedValue([]);
+    vi.mocked(mockPrisma.stagedEpic.findMany).mockResolvedValue(stagedEpics as any);
+    vi.mocked(mockPrisma.stagedAssignee.findMany).mockResolvedValue([] as any);
+    vi.mocked(mockPrisma.stagedIssue.findMany).mockResolvedValue([] as any);
+    vi.mocked(mockPrisma.stagedIssueStatusHistory.findMany).mockResolvedValue([] as any);
 
     await expect(
       publishSyncRun({ syncRunId: "sr-1", jiraConnectionId: "conn-1" }),

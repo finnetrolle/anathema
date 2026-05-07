@@ -291,8 +291,18 @@ describe("real smoke sync gate", () => {
 
     expect(scopedDashboard.projectFilter.selectedProjectId).toBe(coreProject.id);
     expect(flattenIssueKeys(scopedDashboard)).toEqual(["CORE-101"]);
-    expect(await prisma.dailyBriefRun.count()).toBe(5);
-    expect(await prisma.dailyBriefItem.count()).toBeGreaterThan(0);
+    expect(
+      await prisma.jiraConnection.findUniqueOrThrow({
+        where: {
+          baseUrl: runtime.baseUrl,
+        },
+        select: {
+          activeSyncRunId: true,
+        },
+      }),
+    ).toEqual({
+      activeSyncRunId: firstChunk.syncRunId,
+    });
   });
 
   it("marks a failed sync run as failed and keeps staged data out of the published dashboard", async () => {

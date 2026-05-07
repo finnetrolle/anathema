@@ -4,6 +4,7 @@ import type {
 } from "@/modules/jira/types";
 import { readJsonResponse } from "@/modules/http/read-json-response";
 import { combineSignals, isAbortError, throwIfAborted } from "@/modules/jira/abort";
+import { trimTrailingSlash } from "@/modules/shared/strings";
 
 type SearchJiraIssuesPageInput = {
   jql?: string;
@@ -98,10 +99,6 @@ export function readJiraCredentials(): JiraCredentials {
     authMode,
     apiVersion,
   };
-}
-
-function trimTrailingSlash(value: string) {
-  return value.replace(/\/+$/, "");
 }
 
 function buildBaseUrlCandidates(baseUrl: string) {

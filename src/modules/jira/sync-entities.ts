@@ -16,8 +16,6 @@ import {
 } from "@/modules/timeline/date-helpers";
 import type { TimelineMarkerKind } from "@/modules/timeline/types";
 
-// ── Types ──
-
 export type ProjectSeed = {
   jiraProjectId: string;
   key: string;
@@ -40,8 +38,6 @@ export type CollectedTransition = {
   changedAt: Date;
 };
 
-// ── Pure functions ──
-
 export function readEpicLinkKey(issue: JiraIssue, epicLinkFieldId?: string) {
   if (!epicLinkFieldId) {
     return null;
@@ -60,12 +56,14 @@ export function readEpicLinkKey(issue: JiraIssue, epicLinkFieldId?: string) {
   return null;
 }
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function parseJiraDate(value?: string | null, timezone?: string | null) {
   if (!value) {
     return null;
   }
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (DATE_ONLY_RE.test(value)) {
     return parseDateOnlyAtHourInTimezone(
       value,
       normalizeTimelineTimezone(timezone),
@@ -78,8 +76,34 @@ export function parseJiraDate(value?: string | null, timezone?: string | null) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function toPrismaJson(value: unknown) {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+export function toPrismaJson(value: unknown): Prisma.InputJsonValue | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value as Prisma.InputJsonValue;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => toPrismaJson(entry)) as Prisma.InputJsonArray;
+  }
+
+  const result: Record<string, Prisma.InputJsonValue | null> = {};
+
+  for (const [key, val] of Object.entries(value)) {
+    if (val === undefined) {
+      continue;
+    }
+
+    result[key] = toPrismaJson(val);
+  }
+
+  return result as Prisma.InputJsonObject;
 }
 
 export function buildRawPayload(
@@ -306,7 +330,7 @@ export function collectEntities(
     markerKind: string;
     jiraCreatedAt: Date | null;
     jiraUpdatedAt: Date | null;
-    rawPayload: Prisma.InputJsonValue;
+    rawPayload: Prisma.InputJsonValue | null;
   }[] = [];
   const transitionRecords: CollectedTransition[] = [];
 

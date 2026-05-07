@@ -21,6 +21,7 @@ import {
   isWeekendDayKey,
 } from "@/modules/timeline/date-helpers";
 import { resolveTimelineTaskBounds } from "@/modules/timeline/task-bounds";
+import { parseDerivedDate } from "@/modules/timeline/raw-payload-helpers";
 import {
   type TimelineRangeOptions,
   type TimelineDateBounds,
@@ -39,16 +40,6 @@ type BuildTimelineOptions = TimelineRangeOptions & {
   resolvedRange?: TimelineResolvedRange;
   now?: Date;
 };
-
-function assertDate(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? null : date;
-}
 
 function collectDateBounds(dates: Array<Date | null>) {
   const validDates = dates.filter((date): date is Date => date !== null);
@@ -156,11 +147,11 @@ function createStartLabel(
 }
 
 function resolveIssueDates(issue: TimelineIssue, now?: Date) {
-  const markerDate = assertDate(issue.markerAt);
-  const createdDate = assertDate(issue.createdAt);
-  const actualStartDate = assertDate(issue.startAt);
-  const dueDate = assertDate(issue.dueAt);
-  const resolvedDate = assertDate(issue.resolvedAt);
+  const markerDate = parseDerivedDate(issue.markerAt);
+  const createdDate = parseDerivedDate(issue.createdAt);
+  const actualStartDate = parseDerivedDate(issue.startAt);
+  const dueDate = parseDerivedDate(issue.dueAt);
+  const resolvedDate = parseDerivedDate(issue.resolvedAt);
 
   return {
     markerDate,
