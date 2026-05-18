@@ -22,6 +22,7 @@ import {
   resolveWorkflowRules,
   type JiraWorkflowRules,
 } from "@/modules/jira/workflow-rules";
+import { computeRiskBatch } from "@/modules/risk/compute";
 
 const DEFAULT_JIRA_SYNC_PAGE_SIZE = 25;
 
@@ -399,6 +400,7 @@ export async function runJiraSyncChunk({
         jiraConnectionId: connection.id,
         signal,
       });
+      await computeRiskBatch({ jiraConnectionId: connection.id, signal });
     }
 
     return {
